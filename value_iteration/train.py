@@ -127,7 +127,7 @@ pylab.ylabel("Value Estimates")
 pylab.savefig("value_estimates.png")
 
 pylab.clf()
-pylab.plot(final_policy)
+pylab.step(np.arange(0, 100), final_policy)
 ax = pylab.subplot(111)
 ax.set_xticks(np.array([1, 25, 50, 75, 99]))
 pylab.xlim([1, 99])
