@@ -6,7 +6,7 @@ import seaborn as sns
 # 現在の状態から取れる行動を返す
 ## ここでは掛け金
 def get_actions(state):
-	actions = np.arange(1, min(state, 100 - state) + 1)
+	actions = np.arange(1, state + 1)
 	return actions
 
 # 価値関数
@@ -40,13 +40,13 @@ def update_value(state):
 	if evaluations is None:
 		return
 	# 最大値を選択
-	V[state] = np.amax(evaluations)
+	V[state] = np.max(evaluations)
 
 def eval(state):
 	actions = get_actions(state)
 	if len(actions) == 0:
 		return None
-	evaluations = np.zeros((len(actions),), dtype=np.float32)
+	evaluations = np.zeros((len(actions),), dtype=np.float64)
 	for i in range(len(actions)):
 		action = actions[i]
 		for new_state in range(0, 101):
@@ -73,7 +73,7 @@ states = np.arange(0, 101)
 
 # 状態価値関数
 ## ここではテーブル
-V = np.zeros((101,), dtype=np.float32)
+V = np.zeros((101,), dtype=np.float64)
 V[100] = 1.0
 
 # コインの表が出る確率
@@ -114,7 +114,7 @@ while 1:
 for state in range(1, 100):
 	print state, "->", V[state]
 
-final_policy = np.zeros((100,), dtype=np.float32)
+final_policy = np.zeros((100,), dtype=np.float64)
 for state in range(1, 100):
 	policy = get_policy(state)
 	if policy is not None:
@@ -138,3 +138,5 @@ pylab.xlim([1, 99])
 pylab.xlabel("Capital")
 pylab.ylabel("Final Policy")
 pylab.savefig("final_policy.png")
+
+evaluations = eval(83)
