@@ -11,6 +11,10 @@ def get_actions(state):
 
 # 価値関数
 def get_value(state):
+	if state == 0:
+		return 0.0
+	if state == 100:
+		return 1.0
 	return V[state]
 
 # 方策
@@ -79,7 +83,7 @@ p = 0.4
 discount_rate = 1
 
 # Δのしきい値
-delta_threshold = 0.00001
+delta_threshold = 1e-20
 
 # Plot
 sns.set_style("ticks")
