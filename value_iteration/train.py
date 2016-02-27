@@ -138,5 +138,3 @@ pylab.xlim([1, 99])
 pylab.xlabel("Capital")
 pylab.ylabel("Final Policy")
 pylab.savefig("final_policy.png")
-
-evaluations = eval(83)
