@@ -83,7 +83,7 @@ p = 0.4
 discount_rate = 1
 
 # Δのしきい値
-delta_threshold = 1e-20
+delta_threshold = 1e-18
 
 # Plot
 sns.set_style("ticks")
@@ -109,7 +109,6 @@ while 1:
 	if iteration == 3:
 		pylab.plot(V, label="sweep 3")
 	iteration += 1
-
 
 for state in range(1, 100):
 	print state, "->", V[state]
