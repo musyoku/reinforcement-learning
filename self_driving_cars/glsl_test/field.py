@@ -1,119 +1,116 @@
 # -*- coding: utf-8 -*-
-# vispy: gallery 30
-# vispy: testskip - because this example sometimes sets inactive attributes
-"""Computing a Voronoi diagram on the GPU. Shows how to use uniform arrays.
-
-Original version by Xavier Olive (xoolive).
-
-"""
-
 import numpy as np
-
 from vispy import app
 from vispy import gloo
 
+# width, height
+screen_size = (1000, 500)
 
-# Voronoi shaders.
-VS_voronoi = """
-attribute vec2 a_position;
+# Color
+color_black = np.asarray((0.0, 0.0, 0.0, 1.0))
+color_field_line_base = np.asarray((231.0 / 255.0, 237.0 / 255.0, 203.0 / 255.0, 1.0))
+color_field_line = 0.8 * color_black + 0.2 * color_field_line_base
+
+# Shaders
+field_line_vertex = """
+attribute vec2 position;
 
 void main() {
-    gl_Position = vec4(a_position, 0., 1.);
+	gl_Position = vec4(position, 0., 1.);
 }
 """
 
-FS_voronoi = """
-uniform vec2 u_seeds[32];
-uniform vec3 u_colors[32];
-uniform vec2 u_screen;
+field_line_fragment = """
+uniform vec4 color;
 
 void main() {
-    float dist = distance(u_screen * u_seeds[0], gl_FragCoord.xy);
-    vec3 color = u_colors[0];
-    for (int i = 1; i < 32; i++) {
-        float current = distance(u_screen * u_seeds[i], gl_FragCoord.xy);
-        if (current < dist) {
-            color = u_colors[i];
-            dist = current;
-        }
-    }
-    gl_FragColor = vec4(color, 1.0);
+	gl_FragColor = color;
 }
 """
 
+class Field:
+	def __init__(self):
+		self.program_line = gloo.Program(field_line_vertex, field_line_fragment)
+		self.program_line["color"] = color_field_line
 
-# Seed point shaders.
-VS_seeds = """
-attribute vec2 a_position;
-uniform float u_ps;
+	def set_line_positions(self, screen_size):
+		# スクリーンサイズ
+		sw = screen_size[0]
+		sh = screen_size[1]
+		# パディング
+		px = 40
+		py = 40
+		# 枠線サイズ
+		lw = 0
+		lh = 0
+		# 伸縮比率
+		rx = 1.0
+		ry = 1.0
+		if sw >= sh:
+			lh = sh - py * 2
+			lw = lh
+			# フィールドは画面の左半分
+			if lw > sw / 2 - px * 2:
+				lw = sw / 2 - px * 2
+				lh = lw
+			if lh > sh - py * 2:
+				lh = sh - py * 2
+				lw = lh
+		else:
+			lw = sw / 2 - px * 2
+			lh = lw
 
-void main() {
-    gl_Position = vec4(2. * a_position - 1., 0., 1.);
-    gl_PointSize = 10. * u_ps;
-}
-"""
+		positions = []
+		n_grids = 6
+		for vertical_i in xrange(n_grids + 1):
+			x = lw / float(n_grids) * vertical_i + px
+			x /= float(sw)
+			y = py
+			y /= float(sh)
+			positions.append((2.0 * x - 1.0, 2.0 * y - 1.0))
+			y = py + lh
+			y /= float(sh)
+			positions.append((2.0 * x - 1.0, 2.0 * y - 1.0))
 
-FS_seeds = """
-varying vec3 v_color;
-void main() {
-    gl_FragColor = vec4(1., 1., 1., 1.);
-}
-"""
+		for horizontal_i in xrange(n_grids + 1):
+			y = lh / float(n_grids) * horizontal_i + py
+			y /= float(sh)
+			x = px
+			x /= float(sw)
+			positions.append((2.0 * x - 1.0, 2.0 * y - 1.0))
+			x = px + lw
+			x /= float(sw)
+			positions.append((2.0 * x - 1.0, 2.0 * y - 1.0))
+
+		self.program_line["position"] = positions
+
+	def draw(self, screen_size):
+		self.set_line_positions(screen_size)
+		self.program_line.draw("lines")
 
 
 class Canvas(app.Canvas):
-    def __init__(self):
-        app.Canvas.__init__(self, size=(600, 600), title='Voronoi diagram',
-                            keys='interactive')
+	def __init__(self):
+		app.Canvas.__init__(self, size=screen_size, title="self-driving", keys="interactive")
 
-        self.ps = self.pixel_scale
+		# Init
+		self.field = Field()
 
-        self.seeds = np.random.uniform(0, 1.0*self.ps,
-                                       size=(32, 2)).astype(np.float32)
-        self.colors = np.random.uniform(0.3, 0.8,
-                                        size=(32, 3)).astype(np.float32)
+		self.activate_zoom()
+		self.show()
 
-        # Set Voronoi program.
-        self.program_v = gloo.Program(VS_voronoi, FS_voronoi)
-        self.program_v['a_position'] = [(-1, -1), (-1, +1), (+1, -1), (+1, +1)]
-        # HACK: work-around a bug related to uniform arrays until
-        # issue #345 is solved.
-        for i in range(32):
-            self.program_v['u_seeds[%d]' % i] = self.seeds[i, :]
-            self.program_v['u_colors[%d]' % i] = self.colors[i, :]
+	def on_draw(self, event):
+		gloo.clear()
+		self.field.draw((self.width, self.height))
 
-        # Set seed points program.
-        self.program_s = gloo.Program(VS_seeds, FS_seeds)
-        self.program_s['a_position'] = self.seeds
-        self.program_s['u_ps'] = self.ps
+	def on_resize(self, event):
+		self.activate_zoom()
 
-        self.activate_zoom()
+	def activate_zoom(self):
+		self.width, self.height = self.size
+		gloo.set_viewport(0, 0, *self.physical_size)
 
-        self.show()
-
-    def on_draw(self, event):
-        gloo.clear()
-        self.program_v.draw('triangle_strip')
-        self.program_s.draw('points')
-
-    def on_resize(self, event):
-        self.activate_zoom()
-
-    def activate_zoom(self):
-        self.width, self.height = self.size
-        gloo.set_viewport(0, 0, *self.physical_size)
-        self.program_v['u_screen'] = (self.width, self.height)
-
-    def on_mouse_move(self, event):
-        x, y = event.pos
-        x, y = x/float(self.width), 1-y/float(self.height)
-        self.program_v['u_seeds[0]'] = x*self.ps, y*self.ps
-        # TODO: just update the first line in the VBO instead of uploading the
-        # whole array of seed points.
-        self.seeds[0, :] = x, y
-        self.program_s['a_position'].set_data(self.seeds)
-        self.update()
 
 if __name__ == "__main__":
-    c = Canvas()
-    app.run()
+	c = Canvas()
+	app.run()
