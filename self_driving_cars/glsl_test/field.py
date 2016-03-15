@@ -205,11 +205,13 @@ class Field:
 
 	def compute_array_index_from_position(self, pixel_x, pixel_y, grid_width=None, grid_height=None):
 		grid_width, grid_height = self.comput_grid_size()
-		if self.is_screen_position_inside_field(pixel_x, pixel_y, grid_width=grid_width, grid_height=grid_height):
-			return (-1, -1)
+		if self.is_screen_position_inside_field(pixel_x, pixel_y, grid_width=grid_width, grid_height=grid_height) is False:
+			return -1, -1
 		subdivision_width = grid_width / float(self.n_grid_w) / 4.0
 		subdivision_height = grid_height / float(self.n_grid_h) / 4.0
-
+		x = pixel_x - self.px + subdivision_width * 2
+		y = pixel_y - self.py + subdivision_height * 2
+		return int(x / subdivision_width), self.grid_subdiv_wall.shape[0] - int(y / subdivision_height) - 1
 
 	def subdivision_exists(self, x, y):
 		if x < 0:
@@ -239,6 +241,28 @@ class Field:
 			lw = sw / 1.3 - self.px * 2
 			lh = lw / ratio
 		return lw, lh
+
+	def construct_wall_at_index(self, array_x, array_y):
+		if array_x < 0:
+			raise Exception()
+		if array_y < 0:
+			raise Exception()
+		if array_x >= self.grid_subdiv_wall.shape[1]:
+			raise Exception()
+		if array_y >= self.grid_subdiv_wall.shape[0]:
+			raise Exception()
+		self.grid_subdiv_wall[array_y, array_x] = 1
+
+	def destroy_wall_at_index(self, array_x, array_y):
+		if array_x < 0:
+			raise Exception()
+		if array_y < 0:
+			raise Exception()
+		if array_x >= self.grid_subdiv_wall.shape[1]:
+			raise Exception()
+		if array_y >= self.grid_subdiv_wall.shape[0]:
+			raise Exception()
+		self.grid_subdiv_wall[array_y, array_x] = 0
 
 	def set_positions(self):
 		# スクリーンサイズ
@@ -392,16 +416,16 @@ class Canvas(app.Canvas):
 
 	def on_mouse_press(self, event):
 		self.is_mouse_pressed = True
-		print event.pos
 
 	def on_mouse_release(self, event):
 		self.is_mouse_pressed = False
-		print event.pos
 
 	def on_mouse_move(self, event):
 		if self.is_mouse_pressed:
 			if field.is_screen_position_inside_field(event.pos[0], event.pos[1]):
-				print event.pos
+				x, y = field.compute_array_index_from_position(event.pos[0], event.pos[1])
+				field.construct_wall_at_index(x, y)
+				self.update()
 
 	def activate_zoom(self):
 		self.width, self.height = self.size
