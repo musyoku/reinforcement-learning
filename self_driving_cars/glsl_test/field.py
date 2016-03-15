@@ -28,22 +28,6 @@ color_field_wall = np.asarray((241.0 / 255.0, 30.0 / 255.0, 30.0 / 255.0, 1.0))
 
 
 # シェーダ
-field_line_vertex = """
-attribute vec2 position;
-
-void main() {
-	gl_Position = vec4(position, 0.0, 1.0);
-}
-"""
-
-field_line_fragment = """
-uniform vec4 color;
-
-void main() {
-	gl_FragColor = color;
-}
-"""
-
 field_point_vertex = """
 attribute vec2 position;
 uniform float point_size;
@@ -117,36 +101,6 @@ void main() {
 }
 """
 
-field_wall_vertex = """
-attribute vec2 position;
-
-void main() {
-    gl_Position = vec4(position, 0.0, 1.0);
-}
-"""
-
-field_wall_fragment = """
-uniform vec4 color;
-uniform vec4 bg_color;
-uniform vec2 screen_size;
-
-void main() {
-    const float M_PI = 3.14159265358979323846;
-    const float NUM_LINES = 100.0;
-    float theta = M_PI / 6.0;
-    float cos_theta = cos(theta);
-    float sin_theta = sin(theta);
-    vec2 coord = gl_FragCoord.xy / screen_size;
-    float x = cos_theta * coord.x - sin_theta * coord.y;
-    float f = fract(x * NUM_LINES);
-    if (f > 0.4){
-		gl_FragColor = color;
-    }else{
-		gl_FragColor = 0.3 * color + 0.7 * bg_color;
-    }
-}
-"""
-
 class Field:
 	def __init__(self):
 		self.enable_grid = True
@@ -161,22 +115,14 @@ class Field:
 
 		self.grid_subdiv_bg, self.grid_subdiv_wall = self.load()
 
-		self.program_grid_line = gloo.Program(field_line_vertex, field_line_fragment)
-		self.program_grid_line["color"] = color_field_grid
 		self.program_grid_point = gloo.Program(field_point_vertex, field_point_fragment)
 		self.program_grid_point["color"] = color_field_point
 		self.program_grid_point["point_size"] = 3.0
-		self.program_subdiv_line = gloo.Program(field_line_vertex, field_line_fragment)
-		self.program_subdiv_line["color"] = color_field_subdiv_line
 		self.program_subdiv_point = gloo.Program(field_point_vertex, field_point_fragment)
 		self.program_subdiv_point["color"] = color_field_subdiv_point
 		self.program_subdiv_point["point_size"] = 1.0
 		self.program_bg = gloo.Program(field_bg_vertex, field_bg_fragment)
 		self.program_bg["screen_size"] = canvas.size
-		self.program_wall = gloo.Program(field_wall_vertex, field_wall_fragment)
-		self.program_wall["color"] = color_field_wall
-		self.program_wall["bg_color"] = 0.6 * color_black + 0.4 * color_field_bg_base
-		self.program_wall["screen_size"] = canvas.size
 
 	def load(self):
 		# 背景
@@ -312,43 +258,6 @@ class Field:
 		sgw = lw / float(self.n_grid_w) / 4.0 / float(sw) * 2.0
 		sgh = lh / float(self.n_grid_h) / 4.0 / float(sh) * 2.0
 
-		line_positions = []
-		subdiv_line_positions = []
-		for m in xrange(self.n_grid_w + 1):
-			x1 = lw / float(self.n_grid_w) * m + self.px
-			x1 = 2.0 * x1 / float(sw) - 1.0
-			y1 = self.py
-			y1 = 2.0 * y1 / float(sh) - 1.0
-			line_positions.append((x1, y1))
-			x2 = x1
-			y2 = self.py + lh
-			y2 = 2.0 * y2 / float(sh) - 1.0
-			line_positions.append((x2, y2))
-			# 小さいグリッド
-			if m < self.n_grid_w:
-				for sub_x in xrange(1, 4):
-					subdiv_line_positions.append((x1 + sgw * sub_x, y1))
-					subdiv_line_positions.append((x2 + sgw * sub_x, y2))
-
-		for m in xrange(self.n_grid_h + 1):
-			x1 = self.px
-			x1 = 2.0 * x1 / float(sw) - 1.0
-			y1 = lh / float(self.n_grid_h) * m + self.py
-			y1 = 2.0 * y1 / float(sh) - 1.0
-			line_positions.append((x1, y1))
-			x2 = self.px + lw
-			x2 = 2.0 * x2 / float(sw) - 1.0
-			y2 = y1
-			line_positions.append((x2, y2))
-			# 小さいグリッド
-			if m < self.n_grid_h:
-				for sub_y in xrange(1, 4):
-					subdiv_line_positions.append((x1, y1 + sgh * sub_y))
-					subdiv_line_positions.append((x2, y2 + sgh * sub_y))
-
-		self.program_grid_line["position"] = line_positions
-		self.program_subdiv_line["position"] = subdiv_line_positions
-
 		point_positions = []
 		for nw in xrange(self.n_grid_w + 1):
 			x = lw / float(self.n_grid_w) * nw + self.px
@@ -383,7 +292,6 @@ class Field:
 		self.program_subdiv_point["position"] = subdiv_point_positions
 
 		bg_positions = []
-		wall_positions = []
 		bg_colors = []
 		wall_colors = []
 		is_wall = []
@@ -412,33 +320,17 @@ class Field:
 						iw = 1.0 if self.grid_subdiv_wall[h, w] == 1 else 0.0
 						is_wall.append(iw)
 
-				if self.grid_subdiv_wall[h, w] == 1:
-					wall_positions.append((x_start + sgw * w, y_start + sgh * h))
-					wall_positions.append((x_start + sgw * (w + 1), y_start + sgh * h))
-					wall_positions.append((x_start + sgw * w, y_start + sgh * (h + 1)))
-
-					wall_positions.append((x_start + sgw * (w + 1), y_start + sgh * h))
-					wall_positions.append((x_start + sgw * w, y_start + sgh * (h + 1)))
-					wall_positions.append((x_start + sgw * (w + 1), y_start + sgh * (h + 1)))
-
-
 		np.random.seed(int(time.time()))
 		self.program_bg["position"] = bg_positions
 		self.program_bg["bg_color"] = bg_colors
 		self.program_bg["wall_color"] = wall_colors
 		self.program_bg["is_wall"] = np.asarray(is_wall, dtype=np.float32)
 
-		self.program_wall["position"] = wall_positions
-
 	def draw(self):
 		self.set_positions()
 		self.program_bg.draw("triangles")
-		# if self.enable_grid:
-		# 	self.program_subdiv_line.draw("lines")
-		# # self.program_wall.draw("triangles")
 		if self.enable_grid:
 			self.program_subdiv_point.draw("points")
-			# self.program_grid_line.draw("lines")
 			self.program_grid_point.draw("points")
 
 	def draw_wall(self):
