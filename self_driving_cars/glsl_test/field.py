@@ -119,6 +119,10 @@ class Field:
 		self.n_grid_h = 6
 		self.n_grid_w = 8
 
+		# パディング
+		self.px = 80
+		self.py = 80
+
 		self.grid_subdiv_bg, self.grid_subdiv_wall = self.load()
 
 		self.program_grid_line = gloo.Program(field_line_vertex, field_line_fragment)
@@ -184,6 +188,29 @@ class Field:
 
 		return grid_subdiv_bg, grid_subdiv_wall
 
+	def is_screen_position_inside_field(self, pixel_x, pixel_y, grid_width=None, grid_height=None):
+		if grid_width is None or grid_height is None:
+			grid_width, grid_height = self.comput_grid_size()
+		subdivision_width = grid_width / float(self.n_grid_w) / 4.0
+		subdivision_height = grid_height / float(self.n_grid_h) / 4.0
+		if pixel_x < self.px - subdivision_width * 2:
+			return False
+		if pixel_x > self.px + grid_width + subdivision_width * 2:
+			return False
+		if pixel_y < self.py - subdivision_height * 2:
+			return False
+		if pixel_y > self.py + grid_height + subdivision_height * 2:
+			return False
+		return True
+
+	def compute_array_index_from_position(self, pixel_x, pixel_y, grid_width=None, grid_height=None):
+		grid_width, grid_height = self.comput_grid_size()
+		if self.is_screen_position_inside_field(pixel_x, pixel_y, grid_width=grid_width, grid_height=grid_height):
+			return (-1, -1)
+		subdivision_width = grid_width / float(self.n_grid_w) / 4.0
+		subdivision_height = grid_height / float(self.n_grid_h) / 4.0
+
+
 	def subdivision_exists(self, x, y):
 		if x < 0:
 			return False
@@ -195,29 +222,29 @@ class Field:
 			return False
 		return True if self.grid_subdiv_bg[y, x] == 1 else False
 
+	def comput_grid_size(self):
+		sw, sh = canvas.size
+		ratio = self.n_grid_h / float(self.n_grid_w)
+		if sw >= sh:
+			lh = sh - self.py * 2
+			lw = lh / ratio
+			# フィールドは画面の左半分
+			if lw > sw / 1.3 - self.px * 2:
+				lw = sw / 1.3 - self.px * 2
+				lh = lw * ratio
+			if lh > sh - self.py * 2:
+				lh = sh - self.py * 2
+				lw = lh / ratio
+		else:
+			lw = sw / 1.3 - self.px * 2
+			lh = lw / ratio
+		return lw, lh
+
 	def set_positions(self):
 		# スクリーンサイズ
 		sw, sh = canvas.size
-		# パディング
-		px = 80
-		py = 80
 		# 枠線サイズ
-		lw = 0
-		lh = 0
-		ratio = self.n_grid_h / float(self.n_grid_w)
-		if sw >= sh:
-			lh = sh - py * 2
-			lw = lh / ratio
-			# フィールドは画面の左半分
-			if lw > sw / 1.3 - px * 2:
-				lw = sw / 1.3 - px * 2
-				lh = lw * ratio
-			if lh > sh - py * 2:
-				lh = sh - py * 2
-				lw = lh / ratio
-		else:
-			lw = sw / 1.3 - px * 2
-			lh = lw / ratio
+		lw ,lh = self.comput_grid_size()
 
 		# 小さいグリッド
 		sgw = lw / float(self.n_grid_w) / 4.0 / float(sw) * 2.0
@@ -226,13 +253,13 @@ class Field:
 		line_positions = []
 		subdiv_line_positions = []
 		for m in xrange(self.n_grid_w + 1):
-			x1 = lw / float(self.n_grid_w) * m + px
+			x1 = lw / float(self.n_grid_w) * m + self.px
 			x1 = 2.0 * x1 / float(sw) - 1.0
-			y1 = py
+			y1 = self.py
 			y1 = 2.0 * y1 / float(sh) - 1.0
 			line_positions.append((x1, y1))
 			x2 = x1
-			y2 = py + lh
+			y2 = self.py + lh
 			y2 = 2.0 * y2 / float(sh) - 1.0
 			line_positions.append((x2, y2))
 			# 小さいグリッド
@@ -242,12 +269,12 @@ class Field:
 					subdiv_line_positions.append((x2 + sgw * sub_x, y2))
 
 		for m in xrange(self.n_grid_h + 1):
-			x1 = px
+			x1 = self.px
 			x1 = 2.0 * x1 / float(sw) - 1.0
-			y1 = lh / float(self.n_grid_h) * m + py
+			y1 = lh / float(self.n_grid_h) * m + self.py
 			y1 = 2.0 * y1 / float(sh) - 1.0
 			line_positions.append((x1, y1))
-			x2 = px + lw
+			x2 = self.px + lw
 			x2 = 2.0 * x2 / float(sw) - 1.0
 			y2 = y1
 			line_positions.append((x2, y2))
@@ -262,10 +289,10 @@ class Field:
 
 		point_positions = []
 		for nw in xrange(self.n_grid_w + 1):
-			x = lw / float(self.n_grid_w) * nw + px
+			x = lw / float(self.n_grid_w) * nw + self.px
 			x /= float(sw)
 			for nh in xrange(self.n_grid_h + 1):
-				y = lh / float(self.n_grid_h) * nh + py
+				y = lh / float(self.n_grid_h) * nh + self.py
 				y /= float(sh)
 				point_positions.append((2.0 * x - 1.0, 2.0 * y - 1.0))
 
@@ -274,10 +301,10 @@ class Field:
 		subdiv_point_positions = []
 		# 大きいグリッドの交差点
 		for nw in xrange(self.n_grid_w + 1):
-			x = lw / float(self.n_grid_w) * nw + px
+			x = lw / float(self.n_grid_w) * nw + self.px
 			x = 2.0 * x / float(sw) - 1.0
 			for nh in xrange(self.n_grid_h + 1):
-				y = lh / float(self.n_grid_h) * nh + py
+				y = lh / float(self.n_grid_h) * nh + self.py
 				y = 2.0 * y / float(sh) - 1.0
 				# 小さいグリッド
 				for sub_y in xrange(5):
@@ -297,8 +324,8 @@ class Field:
 		wall_positions = []
 		bg_color = []
 		# x, yそれぞれ2マス分ずらす
-		x_start = 2.0 * px / float(sw) - 1.0 - sgw * 2.0
-		y_start = 2.0 * py / float(sh) - 1.0 - sgh * 2.0
+		x_start = 2.0 * self.px / float(sw) - 1.0 - sgw * 2.0
+		y_start = 2.0 * self.py / float(sh) - 1.0 - sgh * 2.0
 		for h in xrange(self.grid_subdiv_bg.shape[0]):
 			for w in xrange(self.grid_subdiv_bg.shape[1]):
 				if self.grid_subdiv_bg[h, w] == 1:
@@ -342,12 +369,18 @@ class Field:
 			self.program_grid_line.draw("lines")
 			self.program_grid_point.draw("points")
 
+	def draw_wall(self):
+		self.set_positions()
+		self.program_wall.draw("triangles")
+
 class Canvas(app.Canvas):
 	def __init__(self):
 		app.Canvas.__init__(self, size=screen_size, title="self-driving", keys="interactive")
 
 		self.activate_zoom()
 		self.show()
+
+		self.is_mouse_pressed = False
 
 	def on_draw(self, event):
 		gloo.clear()
@@ -356,6 +389,19 @@ class Canvas(app.Canvas):
 	def on_resize(self, event):
 		self.activate_zoom()
 		print "#on_resize()", (self.width, self.height)
+
+	def on_mouse_press(self, event):
+		self.is_mouse_pressed = True
+		print event.pos
+
+	def on_mouse_release(self, event):
+		self.is_mouse_pressed = False
+		print event.pos
+
+	def on_mouse_move(self, event):
+		if self.is_mouse_pressed:
+			if field.is_screen_position_inside_field(event.pos[0], event.pos[1]):
+				print event.pos
 
 	def activate_zoom(self):
 		self.width, self.height = self.size
