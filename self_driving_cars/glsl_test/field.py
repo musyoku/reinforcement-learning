@@ -386,9 +386,10 @@ class Field:
 	def draw(self):
 		self.set_positions()
 		self.program_bg.draw("triangles")
-		self.program_wall.draw("triangles")
 		if self.enable_grid:
 			self.program_subdiv_line.draw("lines")
+		self.program_wall.draw("triangles")
+		if self.enable_grid:
 			self.program_subdiv_point.draw("points")
 			self.program_grid_line.draw("lines")
 			self.program_grid_point.draw("points")
