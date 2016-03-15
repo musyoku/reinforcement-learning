@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 import math, time
 import numpy as np
+from pprint import pprint
 from vispy import app
 from vispy import gloo
 
@@ -18,12 +19,12 @@ color_field_bg_base = np.asarray((27.0 / 255.0, 59.0 / 255.0, 70.0 / 255.0, 1.0)
 color_field_bg = 0.0 * color_black + 1.0 * color_field_bg_base
 color_field_grid_base = np.asarray((232.0 / 255.0, 250.0 / 255.0, 174.0 / 255.0, 1.0))
 color_field_grid = 0.8 * color_field_bg_base + 0.2 * color_field_grid_base
-color_field_point = 0.5 * color_field_bg_base + 0.5 * color_field_grid_base
+color_field_point = 0.6 * color_field_bg_base + 0.4 * color_field_grid_base
 color_field_subdiv_base = np.asarray((66.0 / 255.0, 115.0 / 255.0, 129.0 / 255.0, 1.0))
 color_field_subdiv_line = 0.8 * color_field_bg_base + 0.2 * color_field_subdiv_base
 color_field_subdiv_point_base = np.asarray((134.0 / 255.0, 214.0 / 255.0, 247.0 / 255.0, 1.0))
-color_field_subdiv_point = 0.2 * color_field_bg_base + 0.8 * color_field_subdiv_point_base
-color_field_wall = np.asarray((241.0 / 255.0, 70.0 / 255.0, 57.0 / 255.0, 1.0))
+color_field_subdiv_point = 0.3 * color_field_bg_base + 0.7 * color_field_subdiv_point_base
+color_field_wall = np.asarray((241.0 / 255.0, 30.0 / 255.0, 30.0 / 255.0, 1.0))
 
 
 # シェーダ
@@ -290,13 +291,13 @@ class Field:
 		self.grid_subdiv_wall[array_y, array_x] = 1
 
 	def destroy_wall_at_index(self, array_x, array_y):
-		if array_x < 0:
+		if array_x < 2:
 			raise Exception()
-		if array_y < 0:
+		if array_y < 2:
 			raise Exception()
-		if array_x >= self.grid_subdiv_wall.shape[1]:
+		if array_x >= self.grid_subdiv_wall.shape[1] - 2:
 			raise Exception()
-		if array_y >= self.grid_subdiv_wall.shape[0]:
+		if array_y >= self.grid_subdiv_wall.shape[0] - 2:
 			raise Exception()
 		self.grid_subdiv_wall[array_y, array_x] = 0
 
@@ -452,6 +453,7 @@ class Canvas(app.Canvas):
 		self.show()
 
 		self.is_mouse_pressed = False
+		self.is_key_shift_pressed = False
 
 	def on_draw(self, event):
 		gloo.clear()
@@ -463,16 +465,32 @@ class Canvas(app.Canvas):
 
 	def on_mouse_press(self, event):
 		self.is_mouse_pressed = True
+		self.toggle_wall(event.pos)
 
 	def on_mouse_release(self, event):
 		self.is_mouse_pressed = False
 
 	def on_mouse_move(self, event):
+		self.toggle_wall(event.pos)
+
+	def toggle_wall(self, pos):
 		if self.is_mouse_pressed:
-			if field.is_screen_position_inside_field(event.pos[0], event.pos[1]):
-				x, y = field.compute_array_index_from_position(event.pos[0], event.pos[1])
-				field.construct_wall_at_index(x, y)
+			if field.is_screen_position_inside_field(pos[0], pos[1]):
+				x, y = field.compute_array_index_from_position(pos[0], pos[1])
+				if self.is_key_shift_pressed:
+					field.destroy_wall_at_index(x, y)
+				else:
+					field.construct_wall_at_index(x, y)
 				self.update()
+
+
+	def on_key_press(self, event):
+		if event.key == "Shift":
+			self.is_key_shift_pressed = True
+
+	def on_key_release(self, event):
+		if event.key == "Shift":
+			self.is_key_shift_pressed = False
 
 	def activate_zoom(self):
 		self.width, self.height = self.size
