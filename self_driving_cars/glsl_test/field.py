@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-import math
+import math, time
 import numpy as np
 from vispy import app
 from vispy import gloo
@@ -23,8 +23,7 @@ color_field_subdiv_base = np.asarray((66.0 / 255.0, 115.0 / 255.0, 129.0 / 255.0
 color_field_subdiv_line = 0.8 * color_field_bg_base + 0.2 * color_field_subdiv_base
 color_field_subdiv_point_base = np.asarray((134.0 / 255.0, 214.0 / 255.0, 247.0 / 255.0, 1.0))
 color_field_subdiv_point = 0.2 * color_field_bg_base + 0.8 * color_field_subdiv_point_base
-color_field_wall_base = np.asarray((194.0 / 255.0, 0.0 / 255.0, 0.0 / 255.0, 1.0))
-color_field_wall = 0.4 * color_field_bg_base + 0.6 * color_field_wall_base
+color_field_wall = np.asarray((241.0 / 255.0, 70.0 / 255.0, 57.0 / 255.0, 1.0))
 
 
 # シェーダ
@@ -64,20 +63,56 @@ void main() {
 
 field_bg_vertex = """
 attribute vec2 position;
-attribute vec4 color;
-varying vec4 v_color;
+attribute vec4 bg_color;
+attribute vec4 wall_color;
+attribute vec4 grid_color;
+attribute float is_wall;
+attribute float grid_enabled;
+varying vec4 v_bg_color;
+varying vec4 v_wall_color;
+varying vec4 v_grid_color;
+varying vec2 v_position;
+varying float v_is_wall;
+varying float v_grid_enabled;
 
 void main() {
-	v_color = color;
+	v_bg_color = bg_color;
+	v_wall_color = wall_color;
+	v_grid_color = grid_color;
+	v_position = position;
+	v_grid_enabled = grid_enabled;
+	v_is_wall = is_wall;
     gl_Position = vec4(position, 0.0, 1.0);
 }
 """
 
 field_bg_fragment = """
-varying vec4 v_color;
+uniform vec2 screen_size;
+varying vec4 v_bg_color;
+varying vec4 v_wall_color;
+varying vec4 v_grid_color;
+varying vec2 v_position;
+varying float v_is_wall;
+varying float v_grid_enabled;
 
 void main() {
-	gl_FragColor = v_color;
+    const float M_PI = 3.14159265358979323846;
+    const float NUM_LINES = 100.0;
+	if(v_is_wall == 0.0){
+		gl_FragColor = v_bg_color;
+	}else{
+	    float theta = M_PI / 6.0;
+	    float cos_theta = cos(theta);
+	    float sin_theta = sin(theta);
+	    vec2 coord = gl_FragCoord.xy / screen_size;
+	    float x = cos_theta * coord.x - sin_theta * coord.y;
+	    float f = fract(x * NUM_LINES);
+	    if (f > 0.4){
+			gl_FragColor = 0.5 * v_bg_color + 0.5 * v_wall_color;
+	    }else{
+			gl_FragColor = 0.8 * v_bg_color + 0.2 * v_wall_color;
+	    }
+	}
 }
 """
 
@@ -136,6 +171,7 @@ class Field:
 		self.program_subdiv_point["color"] = color_field_subdiv_point
 		self.program_subdiv_point["point_size"] = 1.0
 		self.program_bg = gloo.Program(field_bg_vertex, field_bg_fragment)
+		self.program_bg["screen_size"] = canvas.size
 		self.program_wall = gloo.Program(field_wall_vertex, field_wall_fragment)
 		self.program_wall["color"] = color_field_wall
 		self.program_wall["bg_color"] = 0.6 * color_black + 0.4 * color_field_bg_base
@@ -265,6 +301,7 @@ class Field:
 		self.grid_subdiv_wall[array_y, array_x] = 0
 
 	def set_positions(self):
+		np.random.seed(0)
 		# スクリーンサイズ
 		sw, sh = canvas.size
 		# 枠線サイズ
@@ -346,7 +383,9 @@ class Field:
 
 		bg_positions = []
 		wall_positions = []
-		bg_color = []
+		bg_colors = []
+		wall_colors = []
+		is_wall = []
 		# x, yそれぞれ2マス分ずらす
 		x_start = 2.0 * self.px / float(sw) - 1.0 - sgw * 2.0
 		y_start = 2.0 * self.py / float(sh) - 1.0 - sgh * 2.0
@@ -365,9 +404,13 @@ class Field:
 					weight = 1.0 - math.sqrt(distance[0] ** 2 + distance[1] ** 2)
 					weight = weight / 2.0 + 0.5
 					opacity = np.random.uniform(0.6 * math.sqrt(weight), 0.7) * weight
-					color = opacity * color_field_bg_base + (1.0 - opacity) * color_black
+					bg_color = opacity * color_field_bg_base + (1.0 - opacity) * color_black
 					for i in xrange(6):
-						bg_color.append(color)
+						bg_colors.append(bg_color)
+						wall_colors.append(color_field_wall)
+						iw = 1.0 if self.grid_subdiv_wall[h, w] == 1 else 0.0
+						is_wall.append(iw)
+
 				if self.grid_subdiv_wall[h, w] == 1:
 					wall_positions.append((x_start + sgw * w, y_start + sgh * h))
 					wall_positions.append((x_start + sgw * (w + 1), y_start + sgh * h))
@@ -378,20 +421,23 @@ class Field:
 					wall_positions.append((x_start + sgw * (w + 1), y_start + sgh * (h + 1)))
 
 
+		np.random.seed(int(time.time()))
 		self.program_bg["position"] = bg_positions
-		self.program_bg["color"] = bg_color
+		self.program_bg["bg_color"] = bg_colors
+		self.program_bg["wall_color"] = wall_colors
+		self.program_bg["is_wall"] = np.asarray(is_wall, dtype=np.float32)
 
 		self.program_wall["position"] = wall_positions
 
 	def draw(self):
 		self.set_positions()
 		self.program_bg.draw("triangles")
-		if self.enable_grid:
-			self.program_subdiv_line.draw("lines")
-		self.program_wall.draw("triangles")
+		# if self.enable_grid:
+		# 	self.program_subdiv_line.draw("lines")
+		# # self.program_wall.draw("triangles")
 		if self.enable_grid:
 			self.program_subdiv_point.draw("points")
-			self.program_grid_line.draw("lines")
+			# self.program_grid_line.draw("lines")
 			self.program_grid_point.draw("points")
 
 	def draw_wall(self):
