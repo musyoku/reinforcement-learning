@@ -13,6 +13,23 @@ n_grid_w = 8
 
 # 背景
 grid_subdiv_bg = np.ones((n_grid_h * 4 + 4, n_grid_w * 4 + 4), dtype=np.uint8)
+for x in xrange(grid_subdiv_bg.shape[1]):
+	r = np.random.uniform()
+	if r > 0.7:
+		grid_subdiv_bg[0, x] = 0
+	r = np.random.uniform()
+	if r > 0.7:
+		grid_subdiv_bg[-1, x] = 0
+for y in xrange(grid_subdiv_bg.shape[0]):
+	r = np.random.uniform()
+	if r > 0.7:
+		grid_subdiv_bg[y, 0] = 0
+	r = np.random.uniform()
+	if r > 0.7:
+		grid_subdiv_bg[y, -1] = 0
+
+grid_subdiv_bg[20, 20] = 0
+
 # 壁
 grid_subdiv_wall = np.zeros((n_grid_h * 4 + 4, n_grid_w * 4 + 4), dtype=np.uint8)
 
@@ -25,7 +42,9 @@ color_field_line = 0.6 * color_field_bg_base + 0.4 * color_field_line_base
 color_field_point = 0.4 * color_field_bg_base + 0.6 * color_field_line_base
 color_field_subdiv_base = np.asarray((66.0 / 255.0, 115.0 / 255.0, 129.0 / 255.0, 1.0))
 color_field_subdiv_line = 0.8 * color_field_bg_base + 0.2 * color_field_subdiv_base
-color_field_subdiv_point = np.asarray((134.0 / 255.0, 214.0 / 255.0, 247.0 / 255.0, 1.0))
+color_field_subdiv_point_base = np.asarray((134.0 / 255.0, 214.0 / 255.0, 247.0 / 255.0, 1.0))
+color_field_subdiv_point = 0.2 * color_field_bg_base + 0.8 * color_field_subdiv_point_base
+
 
 # シェーダ
 field_line_vertex = """
@@ -168,11 +187,11 @@ class Field:
 		self.program_subdiv_line["position"] = subdiv_line_positions
 
 		point_positions = []
-		for nh in xrange(n_grid_w + 1):
-			x = lw / float(n_grid_w) * nh + px
+		for nw in xrange(n_grid_w + 1):
+			x = lw / float(n_grid_w) * nw + px
 			x /= float(sw)
-			for nv in xrange(n_grid_h + 1):
-				y = lh / float(n_grid_h) * nv + py
+			for nh in xrange(n_grid_h + 1):
+				y = lh / float(n_grid_h) * nh + py
 				y /= float(sh)
 				point_positions.append((2.0 * x - 1.0, 2.0 * y - 1.0))
 
@@ -180,16 +199,44 @@ class Field:
 
 		subdiv_point_positions = []
 		# 大きいグリッドの交差点
-		for nh in xrange(n_grid_w + 1):
-			x = lw / float(n_grid_w) * nh + px
+		for nw in xrange(n_grid_w + 1):
+			x = lw / float(n_grid_w) * nw + px
 			x = 2.0 * x / float(sw) - 1.0
-			for nv in xrange(n_grid_h + 1):
-				y = lh / float(n_grid_h) * nv + py
+			for nh in xrange(n_grid_h + 1):
+				y = lh / float(n_grid_h) * nh + py
 				y = 2.0 * y / float(sh) - 1.0
 				# 小さいグリッド
 				for sub_y in xrange(5):
 					_y = y + sgh * sub_y
 					for sub_x in xrange(5):
+						xi = nw * 4 + sub_x
+						yi = nh * 4 + sub_y
+						if xi == grid_subdiv_bg.shape[1]:
+							if yi == grid_subdiv_bg.shape[0]:
+								if grid_subdiv_bg[yi - 1, xi - 1] == 0:
+									continue
+							elif yi == 0:
+								continue
+							elif grid_subdiv_bg[yi - 1, xi - 1] == 0:
+								continue
+							xi -= 1
+						if yi == grid_subdiv_bg.shape[0]:
+							if grid_subdiv_bg[yi - 1, xi] == 0:
+								if xi == 0:
+									continue
+								elif grid_subdiv_bg[yi - 1, xi - 1] == 0:
+									continue
+							yi -= 1
+						if grid_subdiv_bg[yi, xi] == 0:
+							if xi == 0:
+								if yi == 0:
+									continue
+								if grid_subdiv_bg[yi - 1, xi] == 0:
+									continue
+							elif yi == 0:
+								if grid_subdiv_bg[yi, xi - 1] == 0:
+									continue
+
 						_x = x + sgw * sub_x
 						# x, yそれぞれ2マス分ずらす
 						subdiv_point_positions.append((_x - sgw * 2.0, _y - sgh * 2.0))
