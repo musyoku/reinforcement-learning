@@ -2,11 +2,10 @@
 import math, time
 import numpy as np
 from pprint import pprint
-from vispy import app
-from vispy import gloo
+from vispy import app, gloo, visuals
 
 # width, height
-screen_size = (1000, 600)
+screen_size = (1110, 800)
 
 # グリッド数
 n_grid_h = 6
@@ -18,13 +17,12 @@ color_black = np.asarray((0.0, 0.0, 0.0, 1.0))
 color_field_bg_base = np.asarray((27.0 / 255.0, 59.0 / 255.0, 70.0 / 255.0, 1.0))
 color_field_bg = 0.0 * color_black + 1.0 * color_field_bg_base
 color_field_grid_base = np.asarray((232.0 / 255.0, 250.0 / 255.0, 174.0 / 255.0, 1.0))
-color_field_grid = 0.8 * color_field_bg_base + 0.2 * color_field_grid_base
 color_field_point = 0.6 * color_field_bg_base + 0.4 * color_field_grid_base
-color_field_subdiv_base = np.asarray((66.0 / 255.0, 115.0 / 255.0, 129.0 / 255.0, 1.0))
-color_field_subdiv_line = 0.8 * color_field_bg_base + 0.2 * color_field_subdiv_base
 color_field_subdiv_point_base = np.asarray((134.0 / 255.0, 214.0 / 255.0, 247.0 / 255.0, 1.0))
 color_field_subdiv_point = 0.3 * color_field_bg_base + 0.7 * color_field_subdiv_point_base
 color_field_wall = np.asarray((241.0 / 255.0, 30.0 / 255.0, 30.0 / 255.0, 1.0))
+color_text_highlighted = np.asarray((170.0 / 255.0, 248.0 / 255.0, 230.0 / 255.0, 1.0))
+color_text = np.asarray((107.0 / 255.0, 189.0 / 255.0, 205.0 / 255.0, 1.0))
 
 
 # シェーダ
@@ -33,8 +31,8 @@ attribute vec2 position;
 uniform float point_size;
 
 void main() {
-    gl_Position = vec4(position, 0.0, 1.0);
-    gl_PointSize = point_size;
+	gl_Position = vec4(position, 0.0, 1.0);
+	gl_PointSize = point_size;
 }
 """
 
@@ -67,7 +65,7 @@ void main() {
 	v_position = position;
 	v_grid_enabled = grid_enabled;
 	v_is_wall = is_wall;
-    gl_Position = vec4(position, 0.0, 1.0);
+	gl_Position = vec4(position, 0.0, 1.0);
 }
 """
 
@@ -81,22 +79,49 @@ varying float v_is_wall;
 varying float v_grid_enabled;
 
 void main() {
-    const float M_PI = 3.14159265358979323846;
-    const float NUM_LINES = 100.0;
+	const float M_PI = 3.14159265358979323846;
+	const float NUM_LINES = 100.0;
 	if(v_is_wall == 0.0){
 		gl_FragColor = v_bg_color;
 	}else{
-	    float theta = M_PI / 6.0;
-	    float cos_theta = cos(theta);
-	    float sin_theta = sin(theta);
-	    vec2 coord = gl_FragCoord.xy / screen_size;
-	    float x = cos_theta * coord.x - sin_theta * coord.y;
-	    float f = fract(x * NUM_LINES);
-	    if (f > 0.4){
+		float theta = M_PI / 6.0;
+		float cos_theta = cos(theta);
+		float sin_theta = sin(theta);
+		vec2 coord = gl_FragCoord.xy / screen_size;
+		float x = cos_theta * coord.x - sin_theta * coord.y;
+		float f = fract(x * NUM_LINES);
+		if (f > 0.4){
 			gl_FragColor = 0.5 * v_bg_color + 0.5 * v_wall_color;
-	    }else{
+		}else{
 			gl_FragColor = 0.8 * v_bg_color + 0.2 * v_wall_color;
-	    }
+		}
+	}
+}
+"""
+
+gui_grid_vertex = """
+attribute vec2 position;
+uniform float point_size;
+uniform float highlighted;
+varying float v_highlighted;
+
+void main() {
+	v_highlighted = highlighted;
+	gl_Position = vec4(position, 0.0, 1.0);
+	gl_PointSize = point_size;
+}
+"""
+
+gui_grid_fragment = """
+varying float v_highlighted;
+uniform vec4 color;
+uniform vec4 highlighted_color;
+
+void main() {
+	if(v_highlighted == 0.0){
+		gl_FragColor = color;
+	}else{
+		gl_FragColor = highlighted_color;
 	}
 }
 """
@@ -111,7 +136,7 @@ class Field:
 
 		# パディング
 		self.px = 80
-		self.py = 80
+		self.py = 140
 
 		self.grid_subdiv_bg, self.grid_subdiv_wall = self.load()
 
@@ -222,7 +247,7 @@ class Field:
 				lw = lh / ratio
 		else:
 			lw = sw / 1.3 - self.px * 2
-			lh = lw / ratio
+			lh = lw * ratio
 		return lw, lh
 
 	def construct_wall_at_index(self, array_x, array_y):
@@ -337,19 +362,38 @@ class Field:
 		self.set_positions()
 		self.program_wall.draw("triangles")
 
+class GUI():
+	def __init__(self):
+		self.color_hex_str_text = "#6bbdcd"
+		self.color_hex_str_text_highlighted = "#aaf8e6"
+		self.text_title_field_self = visuals.TextVisual("SELF", color=self.color_hex_str_text_highlighted)
+		self.text_title_field_driving = visuals.TextVisual("DRIVING", color=self.color_hex_str_text)
+		self.text_title_field_self.font_size = 40
+		self.text_title_field_driving.font_size = 40
+		self.text_title_field_self.pos = 400, 300
+		self.text_title_field_driving.pos = 460, 300
+
+	def configure(self, canvas, viewport):
+		self.text_title_field_self.transforms.configure(canvas=canvas, viewport=viewport)
+		self.text_title_field_driving.transforms.configure(canvas=canvas, viewport=viewport)
+		
+	def draw(self):
+		self.text_title_field_self.draw()
+		self.text_title_field_driving.draw()
+
 class Canvas(app.Canvas):
 	def __init__(self):
 		app.Canvas.__init__(self, size=screen_size, title="self-driving", keys="interactive")
 
-		self.activate_zoom()
-		self.show()
-
 		self.is_mouse_pressed = False
 		self.is_key_shift_pressed = False
 
+
 	def on_draw(self, event):
 		gloo.clear()
+		gloo.set_viewport(0, 0, *self.physical_size)
 		field.draw()
+		gui.draw()
 
 	def on_resize(self, event):
 		self.activate_zoom()
@@ -387,9 +431,13 @@ class Canvas(app.Canvas):
 	def activate_zoom(self):
 		self.width, self.height = self.size
 		gloo.set_viewport(0, 0, *self.physical_size)
-
+		vp = (0, 0, self.physical_size[0], self.physical_size[1])
+		gui.configure(canvas=self, viewport=vp)
 
 if __name__ == "__main__":
 	canvas = Canvas()
+	gui = GUI()
 	field = Field()
+	canvas.activate_zoom()
+	canvas.show()
 	app.run()
