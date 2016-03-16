@@ -13,7 +13,7 @@ n_grid_w = 8
 
 
 # 色
-color_black = np.asarray((0.0, 0.0, 0.0, 1.0))
+color_black = np.asarray((14.0 / 255.0, 14.0 / 255.0, 14.0 / 255.0, 1.0))
 color_field_bg_base = np.asarray((27.0 / 255.0, 59.0 / 255.0, 70.0 / 255.0, 1.0))
 color_field_bg = 0.0 * color_black + 1.0 * color_field_bg_base
 color_field_grid_base = np.asarray((232.0 / 255.0, 250.0 / 255.0, 174.0 / 255.0, 1.0))
@@ -29,6 +29,8 @@ color_gui_grid = 0.4 * color_black + 0.5 * color_gui_grid_base
 color_gui_sensor_red = np.asarray((247.0 / 255.0, 121.0 / 255.0, 71.0 / 255.0, 1.0))
 color_gui_sensor_yellow = np.asarray((212.0 / 255.0, 219.0 / 255.0, 185.0 / 255.0, 1.0))
 color_gui_sensor_blue = np.asarray((107.0 / 255.0, 189.0 / 255.0, 205.0 / 255.0, 1.0))
+color_gui_sensor_line = color_gui_grid_highlighted
+color_gui_sensor_line_highlight = np.asarray((39.0 / 255.0, 68.0 / 255.0, 74.0 / 255.0, 1.0))
 
 
 # シェーダ
@@ -133,16 +135,31 @@ void main() {
 """
 
 gui_sensor_fragment = """
-uniform vec2 center
+uniform vec2 center;
 uniform float near[8];
 uniform float mid[16];
 uniform float far[24];
 uniform vec4 near_color;
 uniform vec4 mid_color;
 uniform vec4 far_color;
+uniform vec4 bg_color;
+uniform vec4 line_color;
+uniform vec4 line_highlighted_color;
 
 void main() {
-	gl_FragColor = vec4(1);
+	vec2 coord = gl_FragCoord.xy;
+	const float outer_radius = 100;
+	const float outer_line_width = 1;
+	float d = distance(coord, center);
+	float tmp = d - outer_radius;
+	if(tmp < -outer_line_width || tmp > outer_line_width){
+		discard;
+	}
+	if(tmp > 0){
+		gl_FragColor = mix(line_color, bg_color, fract(tmp));
+	}else{
+		gl_FragColor = mix(bg_color, line_color, fract(1 + tmp));
+	}
 }
 """
 
@@ -402,7 +419,7 @@ class Field:
 			self.program_grid_point.draw("points")
 
 	def draw_wall(self):
-		self.set_positions()
+
 		self.program_wall.draw("triangles")
 
 class Gui():
@@ -420,7 +437,12 @@ class Gui():
 		self.program_bg_point["color"] = color_gui_grid
 
 		self.program_sensor = gloo.Program(gui_sensor_vertex, gui_sensor_fragment)
-		self.program_sensor["color"] = color_gui_grid
+		self.program_sensor["near_color"] = color_gui_sensor_red
+		self.program_sensor["mid_color"] = color_gui_sensor_yellow
+		self.program_sensor["far_color"] = color_gui_sensor_blue
+		self.program_sensor["bg_color"] = color_black
+		self.program_sensor["line_color"] = color_gui_sensor_line
+		self.program_sensor["line_highlighted_color"] = color_gui_sensor_line_highlight
 
 		self.color_hex_str_text = "#6bbdcd"
 		self.color_hex_str_text_highlighted = "#a0c6c3"
@@ -438,7 +460,6 @@ class Gui():
 		sw, sh = canvas.size
 		sw = float(sw)
 		sh = float(sh)
-		lw ,lh = field.comput_grid_size()
 		lw ,lh = field.comput_grid_size()
 		sgw = lw / float(field.n_grid_w) / 4.0
 		sgh = lh / float(field.n_grid_h) / 4.0
@@ -512,9 +533,36 @@ class Gui():
 	def draw_sensor(self):
 		car = cars.get_car_at_index(0)
 		sensor_value = car.get_sensor_value()
-		self.program_sensor["near"] = sensor_value[0:8]
-		self.program_sensor["mid"] = sensor_value[8:24]
-		self.program_sensor["far"] = sensor_value[24:48]
+		# HACK
+		for i in xrange(8):
+			self.program_sensor["near[%d]" % i] = sensor_value[i]
+		for i in xrange(16):
+			self.program_sensor["mid[%d]" % i] = sensor_value[i + 8]
+		for i in xrange(24):
+			self.program_sensor["far[%d]" % i] = sensor_value[i + 24]
+
+		sw, sh = canvas.size
+		sw = float(sw)
+		sh = float(sh)
+		lw ,lh = field.comput_grid_size()
+		sgw = lw / float(field.n_grid_w) / 4.0
+		sgh = lh / float(field.n_grid_h) / 4.0
+		base_x = 2.0 * (field.px + lw + sgw * 3.0) / sw - 1
+		base_y = 2.0 * (field.py - sgh * 2.0) / sh - 1
+		width = sgw * 10 / sw * 2.0
+		height = sgh * 10 / sh * 2.0
+		center = (field.px + lw + sgw * 8.0, field.py + sgh * 3.0)
+		self.program_sensor["center"] = center
+		positions = []
+		positions.append((base_x, base_y))
+		positions.append((base_x + width, base_y))
+		positions.append((base_x, base_y + height))
+		positions.append((base_x + width, base_y + height))
+		positions.append(positions[1])
+		positions.append(positions[2])
+		positions.append(positions[3])
+		self.program_sensor["position"] = positions
+
 		self.program_sensor.draw("triangles")
 
 class CarManager:
@@ -629,11 +677,11 @@ class Canvas(app.Canvas):
 	def on_mouse_move(self, event):
 		self.toggle_wall(event.pos)
 		car.pos = event.pos[0], event.pos[1]
-		car.get_sensor_value()
+		gui.draw_sensor()
 
 	def on_mouse_wheel(self, event):
 		car.action_steer_right()
-		car.get_sensor_value()
+		gui.draw_sensor()
 
 	def toggle_wall(self, pos):
 		if self.is_mouse_pressed:
