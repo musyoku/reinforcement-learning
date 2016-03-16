@@ -5,7 +5,7 @@ from pprint import pprint
 from vispy import app, gloo, visuals
 
 # width, height
-screen_size = (1110, 800)
+screen_size = (1180, 800)
 
 # グリッド数
 n_grid_h = 6
@@ -21,8 +21,11 @@ color_field_point = 0.6 * color_field_bg_base + 0.4 * color_field_grid_base
 color_field_subdiv_point_base = np.asarray((134.0 / 255.0, 214.0 / 255.0, 247.0 / 255.0, 1.0))
 color_field_subdiv_point = 0.3 * color_field_bg_base + 0.7 * color_field_subdiv_point_base
 color_field_wall = np.asarray((241.0 / 255.0, 30.0 / 255.0, 30.0 / 255.0, 1.0))
-color_text_highlighted = np.asarray((170.0 / 255.0, 248.0 / 255.0, 230.0 / 255.0, 1.0))
-color_text = np.asarray((107.0 / 255.0, 189.0 / 255.0, 205.0 / 255.0, 1.0))
+color_gui_text_highlighted = np.asarray((170.0 / 255.0, 248.0 / 255.0, 230.0 / 255.0, 1.0))
+color_gui_text = np.asarray((107.0 / 255.0, 189.0 / 255.0, 205.0 / 255.0, 1.0))
+color_gui_grid_base = np.asarray((135.0 / 255.0, 214.0 / 255.0, 247.0 / 255.0, 1.0))
+color_gui_grid_highlighted = 0.2 * color_black + 0.8 * color_gui_grid_base
+color_gui_grid = 0.4 * color_black + 0.5 * color_gui_grid_base
 
 
 # シェーダ
@@ -79,36 +82,32 @@ varying float v_is_wall;
 varying float v_grid_enabled;
 
 void main() {
+	vec4 bg_color = v_bg_color;
+	
+	// Wall
 	const float M_PI = 3.14159265358979323846;
 	const float NUM_LINES = 100.0;
-	if(v_is_wall == 0.0){
-		gl_FragColor = v_bg_color;
-	}else{
-		float theta = M_PI / 6.0;
-		float cos_theta = cos(theta);
-		float sin_theta = sin(theta);
-		vec2 coord = gl_FragCoord.xy / screen_size;
-		float x = cos_theta * coord.x - sin_theta * coord.y;
-		float f = fract(x * NUM_LINES);
-		if (f > 0.4){
-			gl_FragColor = 0.5 * v_bg_color + 0.5 * v_wall_color;
-		}else{
-			gl_FragColor = 0.8 * v_bg_color + 0.2 * v_wall_color;
-		}
-	}
+	float theta = M_PI / 6.0;
+	float cos_theta = cos(theta);
+	float sin_theta = sin(theta);
+	vec2 coord = gl_FragCoord.xy / screen_size;
+	float x = cos_theta * coord.x - sin_theta * coord.y;
+	float f = fract(x * NUM_LINES);
+	vec4 wall_highlighted_color = 0.5 * v_bg_color + 0.5 * v_wall_color;
+	vec4 wall_color = 0.8 * v_bg_color + 0.2 * v_wall_color;
+	vec4 result = mix(wall_highlighted_color, wall_color, float(f < 0.4));
+	gl_FragColor = mix(result, bg_color, float(v_is_wall == 0));
 }
 """
 
 gui_grid_vertex = """
 attribute vec2 position;
-uniform float point_size;
-uniform float highlighted;
+attribute float highlighted;
 varying float v_highlighted;
 
 void main() {
 	v_highlighted = highlighted;
 	gl_Position = vec4(position, 0.0, 1.0);
-	gl_PointSize = point_size;
 }
 """
 
@@ -118,11 +117,7 @@ uniform vec4 color;
 uniform vec4 highlighted_color;
 
 void main() {
-	if(v_highlighted == 0.0){
-		gl_FragColor = color;
-	}else{
-		gl_FragColor = highlighted_color;
-	}
+	gl_FragColor = mix(highlighted_color, color, float(v_highlighted == 0));
 }
 """
 
@@ -136,7 +131,7 @@ class Field:
 
 		# パディング
 		self.px = 80
-		self.py = 140
+		self.py = 120
 
 		self.grid_subdiv_bg, self.grid_subdiv_wall = self.load()
 
@@ -148,6 +143,17 @@ class Field:
 		self.program_subdiv_point["point_size"] = 1.0
 		self.program_bg = gloo.Program(field_bg_vertex, field_bg_fragment)
 		self.program_bg["screen_size"] = canvas.size
+
+	def get_wall_array(self):
+		return self.grid_subdiv_wall
+
+	def surrounding_wal_indicis(self, array_x, array_y, radius=1):
+		start_xi = 0 if array_x - radius < 0 else array_x - radius
+		start_yi = 0 if array_y - radius < 0 else array_y - radius
+		end_xi = self.grid_subdiv_wall.shape[1] if array_x + radius + 1 > self.grid_subdiv_wall.shape[1] else array_x + radius + 1
+		end_yi = self.grid_subdiv_wall.shape[0] if array_y + radius + 1 > self.grid_subdiv_wall.shape[0] else array_y + radius + 1
+		return np.argwhere(self.grid_subdiv_wall[start_yi:end_yi, start_xi:end_xi] == 1)
+
 
 	def load(self):
 		# 背景
@@ -221,16 +227,28 @@ class Field:
 		y = pixel_y - self.py + subdivision_height * 2
 		return int(x / subdivision_width), self.grid_subdiv_wall.shape[0] - int(y / subdivision_height) - 1
 
-	def subdivision_exists(self, x, y):
-		if x < 0:
+	def is_wall(self, array_x, array_y):
+		if array_x < 0:
 			return False
-		if y < 0:
+		if array_y < 0:
 			return False
-		if x >= self.grid_subdiv_bg.shape[1]:
+		if array_x >= self.grid_subdiv_wall.shape[1]:
 			return False
-		if y >= self.grid_subdiv_bg.shape[0]:
+		if array_y >= self.grid_subdiv_wall.shape[0]:
 			return False
-		return True if self.grid_subdiv_bg[y, x] == 1 else False
+		return True if self.grid_subdiv_wall[array_y, array_x] == 1 else False
+
+
+	def subdivision_exists(self, array_x, array_y):
+		if array_x < 0:
+			return False
+		if array_y < 0:
+			return False
+		if array_x >= self.grid_subdiv_bg.shape[1]:
+			return False
+		if array_y >= self.grid_subdiv_bg.shape[0]:
+			return False
+		return True if self.grid_subdiv_bg[array_y, array_x] == 1 else False
 
 	def comput_grid_size(self):
 		sw, sh = canvas.size
@@ -364,22 +382,185 @@ class Field:
 
 class GUI():
 	def __init__(self):
+		self.program_grid = gloo.Program(gui_grid_vertex, gui_grid_fragment)
+		self.program_grid["color"] = color_gui_grid
+		self.program_grid["highlighted_color"] = color_gui_grid_highlighted
+
+		self.program_point = gloo.Program(field_point_vertex, field_point_fragment)
+		self.program_point["point_size"] = 3.0
+		self.program_point["color"] = color_gui_grid_highlighted
+
+		self.program_bg_point = gloo.Program(field_point_vertex, field_point_fragment)
+		self.program_bg_point["point_size"] = 1.0
+		self.program_bg_point["color"] = color_gui_grid_highlighted
+
 		self.color_hex_str_text = "#6bbdcd"
 		self.color_hex_str_text_highlighted = "#aaf8e6"
-		self.text_title_field_self = visuals.TextVisual("SELF", color=self.color_hex_str_text_highlighted)
-		self.text_title_field_driving = visuals.TextVisual("DRIVING", color=self.color_hex_str_text)
-		self.text_title_field_self.font_size = 40
-		self.text_title_field_driving.font_size = 40
-		self.text_title_field_self.pos = 400, 300
-		self.text_title_field_driving.pos = 460, 300
+		self.text_title_field = visuals.TextVisual("SELF-DRIVING", color=self.color_hex_str_text, bold=True, anchor_x="left", anchor_y="top")
+		self.text_title_field.font_size = 16
+		self.text_title_field.pos = 400, 300
+
+	def set_positions(self):
+		sw, sh = canvas.size
+		sw = float(sw)
+		sh = float(sh)
+		lw ,lh = field.comput_grid_size()
+		lw ,lh = field.comput_grid_size()
+		sgw = lw / float(field.n_grid_w) / 4.0
+		sgh = lh / float(field.n_grid_h) / 4.0
+		positions = []
+		highlighted = []
+		points = []
+
+		# Background
+		bg_points = []
+		base_x = 2.0 * (field.px - sgw * 5) / sw - 1
+		base_y = 2.0 * (field.py - sgh * 5) / sh - 1
+		step_x = sgw / sw * 4.0
+		step_y = sgh / sh * 4.0
+		for yn in xrange(20):
+			for xn in xrange(30):
+				bg_points.append((base_x + step_x * xn, base_y + step_y * yn))
+		self.program_bg_point["position"] = bg_points
+
+		# Field
+		## Top
+		grid_segments = [0.0, 0.1, 0.3, 0.8, 1.0]
+		point_segments = [0.0, 0.1, 0.3, 0.8, 1.0]
+		highlights = [0, 1, 0, 1, 0]
+		base_x = 2.0 * (field.px - sgw * 2.0) / sw - 1
+		base_y = 2.0 * (lh + field.py + sgh * 4.0) / sh - 1
+		length = (lw + sgw * 4.0) / sw * 2.0
+		for i, (f, t) in enumerate(zip(grid_segments[:-1], grid_segments[1:])):
+			positions.append((base_x + length * f, base_y))
+			positions.append((base_x + length * t, base_y))
+			highlighted.append(highlights[i])
+			highlighted.append(highlights[i])
+		for r in point_segments:
+			points.append((base_x + length * r, base_y))
+
+		grid_segments = [0.3, 0.8, 1.0]
+		point_segments = [0.0, 0.3, 0.8, 1.0]
+		highlights = [1, 0, 1]
+		base_y -= sgh / sh / 2.0
+		for i, (f, t) in enumerate(zip(grid_segments[:-1], grid_segments[1:])):
+			positions.append((base_x + length * f, base_y))
+			positions.append((base_x + length * t, base_y))
+			highlighted.append(highlights[i])
+			highlighted.append(highlights[i])
+		for r in point_segments:
+			points.append((base_x + length * r, base_y))
+
+		## Bottom
+		grid_segments = [0.0, 0.3, 0.8, 1.0]
+		point_segments = [0.0, 0.3, 0.8, 1.0]
+		highlights = [1, 0, 0]
+		base_x = 2.0 * (field.px - sgw * 2.0) / sw - 1
+		base_y = 2.0 * (field.py - sgh * 4.0) / sh - 1
+		length = (lw + sgw * 4.0) / sw * 2.0
+		for i, (f, t) in enumerate(zip(grid_segments[:-1], grid_segments[1:])):
+			positions.append((base_x + length * f, base_y))
+			positions.append((base_x + length * t, base_y))
+			highlighted.append(highlights[i])
+			highlighted.append(highlights[i])
+		for r in point_segments:
+			points.append((base_x + length * r, base_y))
+
+		grid_segments = [0.0, 0.3, 0.8, 1.0]
+		point_segments = [0.0, 0.3, 0.8, 1.0]
+		highlights = [0, 1, 1]
+		base_y -= sgh / sh / 2.0
+		for i, (f, t) in enumerate(zip(grid_segments[:-1], grid_segments[1:])):
+			positions.append((base_x + length * f, base_y))
+			positions.append((base_x + length * t, base_y))
+			highlighted.append(highlights[i])
+			highlighted.append(highlights[i])
+		for r in point_segments:
+			points.append((base_x + length * r, base_y))
+
+		self.program_grid["position"] = positions
+		self.program_grid["highlighted"] = np.asarray(highlighted, dtype=np.float32)
+		self.program_point["position"] = points
+
+		# Data
+		## Top
+
+		# Text
+		self.text_title_field.pos = (field.px - sgw * 2.0) + sgw / 2.0, sh - lh - field.py - sgh * 4.0 + sgh / 2.0
 
 	def configure(self, canvas, viewport):
-		self.text_title_field_self.transforms.configure(canvas=canvas, viewport=viewport)
-		self.text_title_field_driving.transforms.configure(canvas=canvas, viewport=viewport)
+		self.text_title_field.transforms.configure(canvas=canvas, viewport=viewport)
 		
 	def draw(self):
-		self.text_title_field_self.draw()
-		self.text_title_field_driving.draw()
+		self.set_positions()
+		self.program_bg_point.draw("points")
+		self.program_grid.draw("lines")
+		self.program_point.draw("points")
+		self.text_title_field.draw()
+
+class Car:
+	near_lookup = np.array([[5, 4, 3], [6, -1, 2], [7, 0, 1]])
+	mid_lookup = np.array([[10, 9, 8, 7, 6], [11, -1, -1, -1, 5], [12, -1, -1, -1, 4], [13, -1, -1, -1, 3], [14, 15, 0, 1, 2]])
+	far_lookup = np.array([[15, 14, 13, 12, 11, 10, 9], [16, -1, -1, -1, -1, -1, 8], [17, -1, -1, -1, -1, -1, 7], [18, -1, -1, -1, -1, -1, 6], [19, -1, -1, -1, -1, -1, 5], [20, -1, -1, -1, -1, -1, 4], [21, 22, 23, 0, 1, 2, 3]])
+	def __init__(self):
+		self.speed = 0
+		self.steering = 0
+		self.steering_unit = math.pi / 30.0
+		self.pos = (0, 0)
+
+	def respawn(self):
+		pass
+
+	def get_sensor_value(self):
+		xi, yi = field.compute_array_index_from_position(self.pos[0], self.pos[1])
+		print "car is in", (xi, yi)
+		values = np.zeros((48,), dtype=np.float32)
+
+		# 近距離
+		blocks = field.surrounding_wal_indicis(xi, yi, 1)
+		for block in blocks:
+			i = Car.near_lookup[block[0]][block[1]]
+			if i != -1:
+				values[i] = 1.0
+
+		# 中距離
+		blocks = field.surrounding_wal_indicis(xi, yi, 2)
+		for block in blocks:
+			i = Car.mid_lookup[block[0]][block[1]]
+			if i != -1:
+				values[i + 8] = 1.0
+
+		# 遠距離
+		blocks = field.surrounding_wal_indicis(xi, yi, 3)
+		for block in blocks:
+			i = Car.far_lookup[block[0]][block[1]]
+			if i != -1:
+				values[i + 24] = 1.0
+
+		# 車体の向きに合わせる
+		area = int(self.steering / math.pi * 4.0)
+		print "steer:", int(self.steering / math.pi * 180.0)
+		print "area:", area
+		ratio = self.steering % (math.pi / 4.0)
+		mix = np.roll(values[0:8], -(area + 1)) * ratio + np.roll(values[0:8], -area) * (1.0 - ratio)
+		print ratio
+		print mix
+		print values
+
+	# アクセル
+	def action_throttle(self):
+		self.speed += 1
+
+	# ブレーキ
+	def action_brake(self):
+		self.speed -= 1
+
+	# ハンドル
+	def action_steer_right(self):
+		self.steering = (self.steering + self.steering_unit) % (math.pi * 2.0)
+
+	def action_steer_left(self):
+		self.steering = (self.steering - self.steering_unit) % (math.pi * 2.0)
 
 class Canvas(app.Canvas):
 	def __init__(self):
@@ -388,9 +569,11 @@ class Canvas(app.Canvas):
 		self.is_mouse_pressed = False
 		self.is_key_shift_pressed = False
 
+	def step(self):
+		pass
 
 	def on_draw(self, event):
-		gloo.clear()
+		gloo.clear(color="#0e0e0e")
 		gloo.set_viewport(0, 0, *self.physical_size)
 		field.draw()
 		gui.draw()
@@ -408,6 +591,12 @@ class Canvas(app.Canvas):
 
 	def on_mouse_move(self, event):
 		self.toggle_wall(event.pos)
+		car.pos = event.pos[0], event.pos[1]
+		car.get_sensor_value()
+
+	def on_mouse_wheel(self, event):
+		car.action_steer_right()
+		car.get_sensor_value()
 
 	def toggle_wall(self, pos):
 		if self.is_mouse_pressed:
@@ -438,6 +627,7 @@ if __name__ == "__main__":
 	canvas = Canvas()
 	gui = GUI()
 	field = Field()
+	car = Car()
 	canvas.activate_zoom()
 	canvas.show()
 	app.run()
