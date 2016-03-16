@@ -23,9 +23,12 @@ color_field_subdiv_point = 0.3 * color_field_bg_base + 0.7 * color_field_subdiv_
 color_field_wall = np.asarray((241.0 / 255.0, 30.0 / 255.0, 30.0 / 255.0, 1.0))
 color_gui_text_highlighted = np.asarray((170.0 / 255.0, 248.0 / 255.0, 230.0 / 255.0, 1.0))
 color_gui_text = np.asarray((107.0 / 255.0, 189.0 / 255.0, 205.0 / 255.0, 1.0))
-color_gui_grid_base = np.asarray((135.0 / 255.0, 214.0 / 255.0, 247.0 / 255.0, 1.0))
+color_gui_grid_base = np.asarray((155.0 / 255.0, 234.0 / 255.0, 247.0 / 255.0, 1.0))
 color_gui_grid_highlighted = 0.2 * color_black + 0.8 * color_gui_grid_base
 color_gui_grid = 0.4 * color_black + 0.5 * color_gui_grid_base
+color_gui_sensor_red = np.asarray((247.0 / 255.0, 121.0 / 255.0, 71.0 / 255.0, 1.0))
+color_gui_sensor_yellow = np.asarray((212.0 / 255.0, 219.0 / 255.0, 185.0 / 255.0, 1.0))
+color_gui_sensor_blue = np.asarray((107.0 / 255.0, 189.0 / 255.0, 205.0 / 255.0, 1.0))
 
 
 # シェーダ
@@ -118,6 +121,28 @@ uniform vec4 highlighted_color;
 
 void main() {
 	gl_FragColor = mix(highlighted_color, color, float(v_highlighted == 0));
+}
+"""
+
+gui_sensor_vertex = """
+attribute vec2 position;
+
+void main() {
+	gl_Position = vec4(position, 0.0, 1.0);
+}
+"""
+
+gui_sensor_fragment = """
+uniform vec2 center
+uniform float near[8];
+uniform float mid[16];
+uniform float far[24];
+uniform vec4 near_color;
+uniform vec4 mid_color;
+uniform vec4 far_color;
+
+void main() {
+	gl_FragColor = vec4(1);
 }
 """
 
@@ -270,24 +295,24 @@ class Field:
 
 	def construct_wall_at_index(self, array_x, array_y):
 		if array_x < 0:
-			raise Exception()
+			return
 		if array_y < 0:
-			raise Exception()
+			return
 		if array_x >= self.grid_subdiv_wall.shape[1]:
-			raise Exception()
+			return
 		if array_y >= self.grid_subdiv_wall.shape[0]:
-			raise Exception()
+			return
 		self.grid_subdiv_wall[array_y, array_x] = 1
 
 	def destroy_wall_at_index(self, array_x, array_y):
 		if array_x < 2:
-			raise Exception()
+			return
 		if array_y < 2:
-			raise Exception()
+			return
 		if array_x >= self.grid_subdiv_wall.shape[1] - 2:
-			raise Exception()
+			return
 		if array_y >= self.grid_subdiv_wall.shape[0] - 2:
-			raise Exception()
+			return
 		self.grid_subdiv_wall[array_y, array_x] = 0
 
 	def set_positions(self):
@@ -380,7 +405,7 @@ class Field:
 		self.set_positions()
 		self.program_wall.draw("triangles")
 
-class GUI():
+class Gui():
 	def __init__(self):
 		self.program_grid = gloo.Program(gui_grid_vertex, gui_grid_fragment)
 		self.program_grid["color"] = color_gui_grid
@@ -392,13 +417,22 @@ class GUI():
 
 		self.program_bg_point = gloo.Program(field_point_vertex, field_point_fragment)
 		self.program_bg_point["point_size"] = 1.0
-		self.program_bg_point["color"] = color_gui_grid_highlighted
+		self.program_bg_point["color"] = color_gui_grid
+
+		self.program_sensor = gloo.Program(gui_sensor_vertex, gui_sensor_fragment)
+		self.program_sensor["color"] = color_gui_grid
 
 		self.color_hex_str_text = "#6bbdcd"
-		self.color_hex_str_text_highlighted = "#aaf8e6"
-		self.text_title_field = visuals.TextVisual("SELF-DRIVING", color=self.color_hex_str_text, bold=True, anchor_x="left", anchor_y="top")
+		self.color_hex_str_text_highlighted = "#a0c6c3"
+
+		self.text_title_field = visuals.TextVisual("SELF-DRIVING", color=self.color_hex_str_text_highlighted, bold=True, anchor_x="left", anchor_y="top")
 		self.text_title_field.font_size = 16
-		self.text_title_field.pos = 400, 300
+
+		self.text_title_data = visuals.TextVisual("DATA", color=self.color_hex_str_text, bold=True, anchor_x="left", anchor_y="top")
+		self.text_title_data.font_size = 16
+
+		self.text_title_sensor = visuals.TextVisual("SENSOR", color=self.color_hex_str_text, bold=True, anchor_x="left", anchor_y="top")
+		self.text_title_sensor.font_size = 16
 
 	def set_positions(self):
 		sw, sh = canvas.size
@@ -423,73 +457,47 @@ class GUI():
 				bg_points.append((base_x + step_x * xn, base_y + step_y * yn))
 		self.program_bg_point["position"] = bg_points
 
+		def register(grid_segments, point_segments, highlights, base_x, base_y, length):
+			for i, (f, t) in enumerate(zip(grid_segments[:-1], grid_segments[1:])):
+				positions.append((base_x + length * f, base_y))
+				positions.append((base_x + length * t, base_y))
+				highlighted.append(highlights[i])
+				highlighted.append(highlights[i])
+			for r in point_segments:
+				points.append((base_x + length * r, base_y))
+
 		# Field
 		## Top
-		grid_segments = [0.0, 0.1, 0.3, 0.8, 1.0]
-		point_segments = [0.0, 0.1, 0.3, 0.8, 1.0]
-		highlights = [0, 1, 0, 1, 0]
-		base_x = 2.0 * (field.px - sgw * 2.0) / sw - 1
-		base_y = 2.0 * (lh + field.py + sgh * 4.0) / sh - 1
-		length = (lw + sgw * 4.0) / sw * 2.0
-		for i, (f, t) in enumerate(zip(grid_segments[:-1], grid_segments[1:])):
-			positions.append((base_x + length * f, base_y))
-			positions.append((base_x + length * t, base_y))
-			highlighted.append(highlights[i])
-			highlighted.append(highlights[i])
-		for r in point_segments:
-			points.append((base_x + length * r, base_y))
-
-		grid_segments = [0.3, 0.8, 1.0]
-		point_segments = [0.0, 0.3, 0.8, 1.0]
-		highlights = [1, 0, 1]
-		base_y -= sgh / sh / 2.0
-		for i, (f, t) in enumerate(zip(grid_segments[:-1], grid_segments[1:])):
-			positions.append((base_x + length * f, base_y))
-			positions.append((base_x + length * t, base_y))
-			highlighted.append(highlights[i])
-			highlighted.append(highlights[i])
-		for r in point_segments:
-			points.append((base_x + length * r, base_y))
-
+		register([0.0, 0.1, 0.3, 0.8, 1.0], [0.0, 0.1, 0.3, 0.8, 1.0], [0, 1, 0, 1, 0], 2.0 * (field.px - sgw * 2.0) / sw - 1, 2.0 * (lh + field.py + sgh * 4.0) / sh - 1, (lw + sgw * 4.0) / sw * 2.0)
+		register([0.3, 0.8, 1.0], [0.0, 0.3, 0.8, 1.0], [1, 0, 1], 2.0 * (field.px - sgw * 2.0) / sw - 1, 2.0 * (lh + field.py + sgh * 3.75) / sh - 1, (lw + sgw * 4.0) / sw * 2.0)
 		## Bottom
-		grid_segments = [0.0, 0.3, 0.8, 1.0]
-		point_segments = [0.0, 0.3, 0.8, 1.0]
-		highlights = [1, 0, 0]
-		base_x = 2.0 * (field.px - sgw * 2.0) / sw - 1
-		base_y = 2.0 * (field.py - sgh * 4.0) / sh - 1
-		length = (lw + sgw * 4.0) / sw * 2.0
-		for i, (f, t) in enumerate(zip(grid_segments[:-1], grid_segments[1:])):
-			positions.append((base_x + length * f, base_y))
-			positions.append((base_x + length * t, base_y))
-			highlighted.append(highlights[i])
-			highlighted.append(highlights[i])
-		for r in point_segments:
-			points.append((base_x + length * r, base_y))
+		register([0.0, 0.3, 0.8, 1.0], [0.0, 0.3, 0.8, 1.0], [1, 0, 0], 2.0 * (field.px - sgw * 2.0) / sw - 1, 2.0 * (field.py - sgh * 4.0) / sh - 1, (lw + sgw * 4.0) / sw * 2.0)
+		register([0.0, 0.3, 0.8, 1.0], [0.0, 0.3, 0.8, 1.0], [0, 1, 1], 2.0 * (field.px - sgw * 2.0) / sw - 1, 2.0 * (field.py - sgh * 3.75) / sh - 1, (lw + sgw * 4.0) / sw * 2.0)
 
-		grid_segments = [0.0, 0.3, 0.8, 1.0]
-		point_segments = [0.0, 0.3, 0.8, 1.0]
-		highlights = [0, 1, 1]
-		base_y -= sgh / sh / 2.0
-		for i, (f, t) in enumerate(zip(grid_segments[:-1], grid_segments[1:])):
-			positions.append((base_x + length * f, base_y))
-			positions.append((base_x + length * t, base_y))
-			highlighted.append(highlights[i])
-			highlighted.append(highlights[i])
-		for r in point_segments:
-			points.append((base_x + length * r, base_y))
+		# Right Column
+		## Top
+		register([0.0, 0.6, 1.0], [0.0, 0.6, 1.0], [1, 0], 2.0 * (field.px + lw + sgw * 3.0) / sw - 1, 2.0 * (field.py + lh + sgh * 4.0) / sh - 1, sgw * 10 / sw * 2.0)
+		register([0.6, 1.0], [0.0, 0.6, 1.0], [1], 2.0 * (field.px + lw + sgw * 3.0) / sw - 1, 2.0 * (field.py + lh + sgh * 3.75) / sh - 1, sgw * 10 / sw * 2.0)
+		## Bottom
+		register([0.0, 1.0], [0.0, 1.0], [1], 2.0 * (field.px + lw + sgw * 3.0) / sw - 1, 2.0 * (field.py - sgh * 4.0) / sh - 1, sgw * 10 / sw * 2.0)
+		register([0.0, 1.0], [0.0, 1.0], [0], 2.0 * (field.px + lw + sgw * 3.0) / sw - 1, 2.0 * (field.py - sgh * 3.75) / sh - 1, sgw * 10 / sw * 2.0)
+		## Status
+		register([0.0, 0.6, 1.0], [0.0, 0.6, 1.0], [1, 0], 2.0 * (field.px + lw + sgw * 3.0) / sw - 1, 2.0 * (field.py + sgh * 9.0) / sh - 1, sgw * 10 / sw * 2.0)
+		register([0.6, 1.0], [0.0, 0.6, 1.0], [1], 2.0 * (field.px + lw + sgw * 3.0) / sw - 1, 2.0 * (field.py + sgh * 8.75) / sh - 1, sgw * 10 / sw * 2.0)
 
 		self.program_grid["position"] = positions
 		self.program_grid["highlighted"] = np.asarray(highlighted, dtype=np.float32)
 		self.program_point["position"] = points
 
-		# Data
-		## Top
-
 		# Text
-		self.text_title_field.pos = (field.px - sgw * 2.0) + sgw / 2.0, sh - lh - field.py - sgh * 4.0 + sgh / 2.0
+		self.text_title_field.pos = field.px - sgw * 1.5, sh - lh - field.py - sgh * 3.5
+		self.text_title_data.pos = field.px + lw + sgw * 3.5, sh - lh - field.py - sgh * 3.5
+		self.text_title_sensor.pos = field.px + lw + sgw * 3.5, sh - field.py - sgh * 8.5
 
 	def configure(self, canvas, viewport):
 		self.text_title_field.transforms.configure(canvas=canvas, viewport=viewport)
+		self.text_title_data.transforms.configure(canvas=canvas, viewport=viewport)
+		self.text_title_sensor.transforms.configure(canvas=canvas, viewport=viewport)
 		
 	def draw(self):
 		self.set_positions()
@@ -497,6 +505,28 @@ class GUI():
 		self.program_grid.draw("lines")
 		self.program_point.draw("points")
 		self.text_title_field.draw()
+		self.text_title_data.draw()
+		self.text_title_sensor.draw()
+		self.draw_sensor()
+
+	def draw_sensor(self):
+		car = cars.get_car_at_index(0)
+		sensor_value = car.get_sensor_value()
+		self.program_sensor["near"] = sensor_value[0:8]
+		self.program_sensor["mid"] = sensor_value[8:24]
+		self.program_sensor["far"] = sensor_value[24:48]
+		self.program_sensor.draw("triangles")
+
+class CarManager:
+	def __init__(self, initial_num_car=10):
+		self.cars = []
+		for i in xrange(initial_num_car):
+			self.cars.append(Car())
+
+	def get_car_at_index(self, index=0):
+		if index < len(self.cars):
+			return self.cars[index]
+		return None
 
 class Car:
 	near_lookup = np.array([[5, 4, 3], [6, -1, 2], [7, 0, 1]])
@@ -513,7 +543,6 @@ class Car:
 
 	def get_sensor_value(self):
 		xi, yi = field.compute_array_index_from_position(self.pos[0], self.pos[1])
-		print "car is in", (xi, yi)
 		values = np.zeros((48,), dtype=np.float32)
 
 		# 近距離
@@ -539,13 +568,21 @@ class Car:
 
 		# 車体の向きに合わせる
 		area = int(self.steering / math.pi * 4.0)
-		print "steer:", int(self.steering / math.pi * 180.0)
-		print "area:", area
 		ratio = self.steering % (math.pi / 4.0)
 		mix = np.roll(values[0:8], -(area + 1)) * ratio + np.roll(values[0:8], -area) * (1.0 - ratio)
-		print ratio
-		print mix
-		print values
+		values[0:8] = mix
+
+		area = int(self.steering / math.pi * 8.0)
+		ratio = self.steering % (math.pi / 8.0)
+		mix = np.roll(values[8:24], -(area + 1)) * ratio + np.roll(values[8:24], -area) * (1.0 - ratio)
+		values[8:24] = mix
+
+		area = int(self.steering / math.pi * 12.0)
+		ratio = self.steering % (math.pi / 12.0)
+		mix = np.roll(values[24:48], -(area + 1)) * ratio + np.roll(values[24:48], -area) * (1.0 - ratio)
+		values[24:48] = mix
+
+		return values
 
 	# アクセル
 	def action_throttle(self):
@@ -625,8 +662,9 @@ class Canvas(app.Canvas):
 
 if __name__ == "__main__":
 	canvas = Canvas()
-	gui = GUI()
+	gui = Gui()
 	field = Field()
+	cars = CarManager()
 	car = Car()
 	canvas.activate_zoom()
 	canvas.show()
