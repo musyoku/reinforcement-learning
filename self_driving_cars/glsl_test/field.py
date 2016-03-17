@@ -7,7 +7,7 @@ from vispy import app, gloo, visuals
 # width, height
 screen_size = (1180, 800)
 
-initial_num_car = 2
+initial_num_car = 20
 
 # グリッド数
 n_grid_h = 6
@@ -306,7 +306,12 @@ class Field:
 		start_yi = 0 if array_y - radius < 0 else array_y - radius
 		end_xi = self.grid_subdiv_wall.shape[1] if array_x + radius + 1 > self.grid_subdiv_wall.shape[1] else array_x + radius + 1
 		end_yi = self.grid_subdiv_wall.shape[0] if array_y + radius + 1 > self.grid_subdiv_wall.shape[0] else array_y + radius + 1
-		return np.argwhere(self.grid_subdiv_wall[start_yi:end_yi, start_xi:end_xi] == 1)
+		zeros = np.zeros((radius * 2 + 1, radius * 2 + 1), dtype=np.uint8)
+		extract = self.grid_subdiv_wall[start_yi:end_yi, start_xi:end_xi]
+		y_shift = max(radius - array_y, 0)
+		x_shift = max(radius - array_x, 0)
+		zeros[y_shift:y_shift + extract.shape[0], x_shift:x_shift + extract.shape[1]] = extract
+		return  np.argwhere(zeros == 1)
 
 	def set_needs_display(self):
 		self.needs_display = True
@@ -689,10 +694,18 @@ class Gui():
 class CarManager:
 	def __init__(self):
 		self.cars = []
-		for i in xrange(initial_num_car):
-			self.cars.append(Car())
+		self.lookup = np.zeros((field.n_grid_h * 4 + 4, field.n_grid_w * 4 + 4, initial_num_car), dtype=np.uint8)
 		self.program = gloo.Program(car_vertex, car_fragment)
-		self.car_lookup = np.zeros((field.n_grid_h * 4 + 4, field.n_grid_w * 4 + 4, initial_num_car), dtype=np.uint8)
+		self.textvisuals = []
+		for i in xrange(initial_num_car):
+			self.cars.append(Car(self, index=i))
+			text = visuals.TextVisual("car %d" % i, color="white", anchor_x="left", anchor_y="top")
+			text.font_size = 8
+			self.textvisuals.append(text)
+
+	def configure(self, canvas, viewport):
+		for text in self.textvisuals:
+			text.transforms.configure(canvas=canvas, viewport=viewport)
 
 	def draw(self):
 		positions = []
@@ -704,11 +717,11 @@ class CarManager:
 		self.program["position"] = positions
 		self.program["color"] = colors
 		self.program.draw("lines")
+		for text in self.textvisuals:
+			text.draw()
 
 	def step(self):
 		for car in self.cars:
-			car.move()
-			continue
 			a = np.random.randint(4)
 			if a == 0:
 				car.action_throttle()
@@ -719,13 +732,15 @@ class CarManager:
 			else:
 				car.action_steer_left()
 			car.move()
+			text = self.textvisuals[car.index]
+			text.pos = car.pos[0] + 10, car.pos[1] - 10
 
-	def surrounding_lookup_indicis(self, array_x, array_y, radius=1):
+	def find_near_cars(self, array_x, array_y, radius=1):
 		start_xi = 0 if array_x - radius < 0 else array_x - radius
 		start_yi = 0 if array_y - radius < 0 else array_y - radius
-		end_xi = self.car_lookup.shape[1] if array_x + radius + 1 > self.car_lookup.shape[1] else array_x + radius + 1
-		end_yi = self.car_lookup.shape[0] if array_y + radius + 1 > self.car_lookup.shape[0] else array_y + radius + 1
-		return np.argwhere(self.car_lookup[start_yi:end_yi, start_xi:end_xi, :] == 1)
+		end_xi = self.lookup.shape[1] if array_x + radius + 1 > self.lookup.shape[1] else array_x + radius + 1
+		end_yi = self.lookup.shape[0] if array_y + radius + 1 > self.lookup.shape[0] else array_y + radius + 1
+		return np.argwhere(self.lookup[start_yi:end_yi, start_xi:end_xi, :] == 1)
 
 	def get_car_at_index(self, index=0):
 		if index < len(self.cars):
@@ -733,11 +748,9 @@ class CarManager:
 		return None
 
 class Car:
-	near_lookup = np.array([[5, 4, 3], [6, -1, 2], [7, 0, 1]])
-	mid_lookup = np.array([[10, 9, 8, 7, 6], [11, -1, -1, -1, 5], [12, -1, -1, -1, 4], [13, -1, -1, -1, 3], [14, 15, 0, 1, 2]])
-	far_lookup = np.array([[15, 14, 13, 12, 11, 10, 9], [16, -1, -1, -1, -1, -1, 8], [17, -1, -1, -1, -1, -1, 7], [18, -1, -1, -1, -1, -1, 6], [19, -1, -1, -1, -1, -1, 5], [20, -1, -1, -1, -1, -1, 4], [21, 22, 23, 0, 1, 2, 3]])
-	car_width = 10.0
-	car_height = 16.0
+	lookup = np.array([[39, 38, 37, 36, 35, 34, 33], [40, 18, 17, 16, 15, 14, 32], [41, 19, 5, 4, 3, 13, 31], [42, 20, 6, -1, 2, 12, 30], [43, 21, 7, 0, 1, 11, 29], [44, 22, 23, 8, 9, 10, 28], [45, 46, 47, 24, 25, 26, 27]])
+	car_width = 12.0
+	car_height = 18.0
 	STATE_NORMAL = 0
 	STATE_REWARD = 1
 	STATE_CRASHED = 2
@@ -746,17 +759,17 @@ class Car:
 				(car_width/2.0, -car_height/2.0), (-car_width/2.0, -car_height/2.0),
 				(-car_width/2.0, -car_height/2.0), (-car_width/2.0, car_height/2.0),
 				(0.0, car_height/2.0+1.0), (0.0, 1.0)]
-	id_seed = 0
-
-	def __init__(self):
+	def __init__(self, manager, index=0):
+		self.index = index
+		self.manager = manager
 		self.speed = 0
 		self.steering = 0
 		self.steering_unit = math.pi / 30.0
 		self.state = Car.STATE_NORMAL
 		self.pos = (canvas.size[0] / 2.0 + np.random.randint(400) - 200, canvas.size[1] / 2.0 + np.random.randint(400) - 200)
 		self.prev_lookup_xi, self.prev_lookup_yi = field.compute_array_index_from_position(self.pos[0], self.pos[1])
-		self.id = Car.id_seed
-		Car.id_seed += 1
+		self.manager.lookup[self.prev_lookup_yi, self.prev_lookup_xi, self.index] = 1
+		self.over = False
 
 	def compute_gl_attributes(self):
 		xi, yi = field.compute_array_index_from_position(self.pos[0], self.pos[1])
@@ -781,34 +794,41 @@ class Car:
 		self.pos = (canvas.size[0] / 2.0, canvas.size[1] / 2.0)
 
 	def get_sensor_value(self):
+		# 衝突判定
+		sw, sh = canvas.size
 		xi, yi = field.compute_array_index_from_position(self.pos[0], self.pos[1])
 		values = np.zeros((48,), dtype=np.float32)
+		self.over == False
 
-		# 近距離
-		blocks = field.surrounding_wal_indicis(xi, yi, 1)
+		# 壁
+		blocks = field.surrounding_wal_indicis(xi, yi, 3)
 		for block in blocks:
-			i = Car.near_lookup[block[0]][block[1]]
+			i = Car.lookup[block[0]][block[1]]
 			if i != -1:
 				values[i] = 1.0
 
-		# 中距離
-		blocks = field.surrounding_wal_indicis(xi, yi, 2)
-		for block in blocks:
-			i = Car.mid_lookup[block[0]][block[1]]
-			if i != -1:
-				values[i + 8] = 1.0
-
-		# 遠距離
-		blocks = field.surrounding_wal_indicis(xi, yi, 3)
-		for block in blocks:
-			print block
-			i = Car.far_lookup[block[0]][block[1]]
-			if i != -1:
-				values[i + 24] = 1.0
-
 		# 他の車
-		blocks = cars.surrounding_lookup_indicis(xi, yi, 1)
+		near_cars = self.manager.find_near_cars(xi, yi, 3)
+		for _, __, car_index in near_cars:
+			if car_index == self.index:
+				continue
+			target_car = self.manager.get_car_at_index(car_index)
+			if target_car is None:
+				continue
 
+			direction = target_car.pos[0] - self.pos[0], target_car.pos[1] - self.pos[1]
+			distance = math.sqrt(direction[0] ** 2 + direction[1] ** 2) / float(sw)
+			theta = (math.atan2(direction[1], direction[0]) + math.pi / 2.0) % (math.pi * 2.0)
+			ds = 0.018
+			dsi = int(distance / ds)
+			if dsi <= 1:
+				if dsi == 0:
+					self.over == True
+				values[int(theta / math.pi * 4.0)] = 1
+			elif dsi == 2:
+				values[int(theta / math.pi * 8.0) + 8] = 1
+			elif dsi == 3:
+				values[int(theta / math.pi * 12.0) + 24] = 1
 
 		# 車体の向きに合わせる
 		area = int(self.steering / math.pi * 4.0)
@@ -835,16 +855,18 @@ class Car:
 		y = cos * self.speed
 		sensors = self.get_sensor_value()
 		self.state = Car.STATE_NORMAL
-		if sensors[0] > 0.5 and self.speed > 0:
+		if np.amax(sensors[[0, 1, 7]]) > 0.5 and self.speed > 0:
 			self.speed = 0
 			self.state = Car.STATE_CRASHED
 			return
-		if sensors[4] > 0.5 and self.speed < 0:
+		if np.amax(sensors[[3, 4, 5]]) > 0.5 and self.speed < 0:
 			self.speed = 0
 			self.state = Car.STATE_CRASHED
 			return
 		if self.speed > 0:
 			self.state = Car.STATE_REWARD
+		if self.over:
+			self.state = Car.STATE_CRASHED
 		self.pos = (self.pos[0] + x, self.pos[1] - y)
 		if field.is_screen_position_inside_field(self.pos[0], self.pos[1]) is False:
 			self.respawn()
@@ -852,8 +874,8 @@ class Car:
 		xi, yi = field.compute_array_index_from_position(self.pos[0], self.pos[1])
 		if xi == self.prev_lookup_xi and yi == self.prev_lookup_yi:
 			return
-		cars.car_lookup[self.prev_lookup_yi,self.prev_lookup_xi,self.id] = 0
-		cars.car_lookup[yi, xi, self.id] = 1
+		self.manager.lookup[self.prev_lookup_yi,self.prev_lookup_xi,self.index] = 0
+		self.manager.lookup[yi, xi, self.index] = 1
 		self.prev_lookup_xi = xi
 		self.prev_lookup_yi = yi
 
@@ -904,12 +926,12 @@ class Canvas(app.Canvas):
 
 	def on_mouse_move(self, event):
 		self.toggle_wall(event.pos)
-		car = cars.get_car_at_index(0)
-		car.pos = event.pos[0], event.pos[1]
+		# car = cars.get_car_at_index(0)
+		# car.pos = event.pos[0], event.pos[1]
 
 	def on_mouse_wheel(self, event):
-		car = cars.get_car_at_index(0)
-		car.action_steer_right()
+		# car = cars.get_car_at_index(0)
+		# car.action_steer_right()
 		pass
 
 	def toggle_wall(self, pos):
@@ -934,6 +956,7 @@ class Canvas(app.Canvas):
 		gloo.set_viewport(0, 0, *self.physical_size)
 		vp = (0, 0, self.physical_size[0], self.physical_size[1])
 		gui.configure(canvas=self, viewport=vp)
+		cars.configure(canvas=self, viewport=vp)
 		field.set_needs_display()
 		
 	def on_timer(self, event):
