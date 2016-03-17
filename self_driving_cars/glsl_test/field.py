@@ -7,6 +7,8 @@ from vispy import app, gloo, visuals
 # width, height
 screen_size = (1180, 800)
 
+initial_num_car = 100
+
 # グリッド数
 n_grid_h = 6
 n_grid_w = 8
@@ -685,11 +687,12 @@ class Gui():
 		self.program_sensor.draw("triangles")
 
 class CarManager:
-	def __init__(self, initial_num_car=10):
+	def __init__(self):
 		self.cars = []
 		for i in xrange(initial_num_car):
 			self.cars.append(Car())
 		self.program = gloo.Program(car_vertex, car_fragment)
+		self.car_lookup = np.zeros((field.n_grid_h * 4 + 4, field.n_grid_w * 4 + 4, initial_num_car), dtype=np.uint8)
 
 	def draw(self):
 		positions = []
@@ -702,6 +705,19 @@ class CarManager:
 		self.program["color"] = colors
 		self.program.draw("lines")
 
+	def step(self):
+		for car in self.cars:
+			a = np.random.randint(4)
+			if a == 0:
+				car.action_throttle()
+			elif a == 1:
+				car.action_brake()
+			elif a == 2:
+				car.action_steer_right()
+			else:
+				car.action_steer_left()
+			car.move()
+
 	def get_car_at_index(self, index=0):
 		if index < len(self.cars):
 			return self.cars[index]
@@ -711,28 +727,33 @@ class Car:
 	near_lookup = np.array([[5, 4, 3], [6, -1, 2], [7, 0, 1]])
 	mid_lookup = np.array([[10, 9, 8, 7, 6], [11, -1, -1, -1, 5], [12, -1, -1, -1, 4], [13, -1, -1, -1, 3], [14, 15, 0, 1, 2]])
 	far_lookup = np.array([[15, 14, 13, 12, 11, 10, 9], [16, -1, -1, -1, -1, -1, 8], [17, -1, -1, -1, -1, -1, 7], [18, -1, -1, -1, -1, -1, 6], [19, -1, -1, -1, -1, -1, 5], [20, -1, -1, -1, -1, -1, 4], [21, 22, 23, 0, 1, 2, 3]])
-	car_width = 12.0
+	car_width = 10.0
 	car_height = 16.0
+	STATE_NORMAL = 0
+	STATE_REWARD = 1
+	STATE_CRASHED = 2
 	shape = [(-car_width/2.0, car_height/2.0), (car_width/2.0, car_height/2.0),
 				(car_width/2.0, car_height/2.0), (car_width/2.0, -car_height/2.0),
 				(car_width/2.0, -car_height/2.0), (-car_width/2.0, -car_height/2.0),
 				(-car_width/2.0, -car_height/2.0), (-car_width/2.0, car_height/2.0),
 				(0.0, car_height/2.0+1.0), (0.0, 1.0)]
+	id_seed = 0
 
-	STATE_NORMAL = 0
-	STATE_CRASHED = 1
 	def __init__(self):
 		self.speed = 0
 		self.steering = 0
 		self.steering_unit = math.pi / 30.0
-		self.pos = (0, 0)
+		self.pos = (canvas.size[0] / 2.0 + np.random.randint(400) - 200, canvas.size[1] / 2.0 + np.random.randint(400) - 200)
+		self.state = Car.STATE_NORMAL
+		self.prev_lookup_xi = -1
+		self.prev_lookup_yi = -1
+		self.id = Car.id_seed
+		Car.id_seed += 1
+		print self.id
 
 	def compute_gl_attributes(self):
 		xi, yi = field.compute_array_index_from_position(self.pos[0], self.pos[1])
 		sw, sh = canvas.size
-		crashed = False
-		if field.is_wall(xi, yi):
-			crashed = True
 		cos = math.cos(-self.steering)
 		sin = math.sin(-self.steering)
 		positions = []
@@ -741,14 +762,16 @@ class Car:
 			_x = 2.0 * (x * cos - y * sin + self.pos[0]) / sw - 1
 			_y = 2.0 * (x * sin + y * cos + (sh - self.pos[1])) / sh - 1
 			positions.append((_x, _y))
-			if crashed:
+			if self.state == Car.STATE_CRASHED:
 				colors.append(color_car_crashed)
+			elif self.state == Car.STATE_REWARD:
+				colors.append(color_car_reward)
 			else:
 				colors.append(color_car_normal)
 		return positions, colors
 
 	def respawn(self):
-		pass
+		self.pos = (canvas.size[0] / 2.0, canvas.size[1] / 2.0)
 
 	def get_sensor_value(self):
 		xi, yi = field.compute_array_index_from_position(self.pos[0], self.pos[1])
@@ -793,6 +816,32 @@ class Car:
 
 		return values
 
+	def move(self):
+		cos = math.cos(-self.steering)
+		sin = math.sin(-self.steering)
+		x = -sin * self.speed		
+		y = cos * self.speed
+		sensors = self.get_sensor_value()
+		self.state = Car.STATE_NORMAL
+		if sensors[0] > 0.5 and self.speed > 0:
+			self.speed = 0
+			self.state = Car.STATE_CRASHED
+			return
+		if sensors[4] > 0.5 and self.speed < 0:
+			self.speed = 0
+			self.state = Car.STATE_CRASHED
+			return
+		if self.speed > 0:
+			self.state = Car.STATE_REWARD
+		self.pos = (self.pos[0] + x, self.pos[1] - y)
+		if field.is_screen_position_inside_field(self.pos[0], self.pos[1]) is False:
+			self.respawn()
+
+		xi, yi = field.compute_array_index_from_position(self.pos[0], self.pos[1])
+		if xi == self.prev_lookup_xi and yi == self.prev_lookup_yi:
+			return
+		self.car_lookup[:,:,self.id] = 0
+
 	# アクセル
 	def action_throttle(self):
 		self.speed += 1
@@ -815,6 +864,8 @@ class Canvas(app.Canvas):
 		self.is_mouse_pressed = False
 		self.is_key_shift_pressed = False
 
+		self._timer = app.Timer(1.0 / 20.0, connect=self.on_timer, start=True)
+
 	def step(self):
 		pass
 
@@ -824,7 +875,6 @@ class Canvas(app.Canvas):
 		field.draw()
 		gui.draw()
 		cars.draw()
-		self.update()
 
 	def on_resize(self, event):
 		self.activate_zoom()
@@ -839,12 +889,9 @@ class Canvas(app.Canvas):
 
 	def on_mouse_move(self, event):
 		self.toggle_wall(event.pos)
-		car = cars.get_car_at_index(0)
-		car.pos = event.pos[0], event.pos[1]
 
 	def on_mouse_wheel(self, event):
-		car = cars.get_car_at_index(0)
-		car.action_steer_right()
+		pass
 
 	def toggle_wall(self, pos):
 		if self.is_mouse_pressed:
@@ -869,6 +916,10 @@ class Canvas(app.Canvas):
 		vp = (0, 0, self.physical_size[0], self.physical_size[1])
 		gui.configure(canvas=self, viewport=vp)
 		field.set_needs_display()
+		
+	def on_timer(self, event):
+		cars.step()
+		self.update()
 
 if __name__ == "__main__":
 	canvas = Canvas()
@@ -877,5 +928,5 @@ if __name__ == "__main__":
 	cars = CarManager()
 	canvas.activate_zoom()
 	canvas.show()
-	canvas.measure_fps()
+	# canvas.measure_fps()
 	app.run()
