@@ -7,7 +7,7 @@ from vispy import app, gloo, visuals
 # width, height
 screen_size = (1180, 800)
 
-initial_num_car = 100
+initial_num_car = 2
 
 # グリッド数
 n_grid_h = 6
@@ -707,6 +707,8 @@ class CarManager:
 
 	def step(self):
 		for car in self.cars:
+			car.move()
+			continue
 			a = np.random.randint(4)
 			if a == 0:
 				car.action_throttle()
@@ -717,6 +719,13 @@ class CarManager:
 			else:
 				car.action_steer_left()
 			car.move()
+
+	def surrounding_lookup_indicis(self, array_x, array_y, radius=1):
+		start_xi = 0 if array_x - radius < 0 else array_x - radius
+		start_yi = 0 if array_y - radius < 0 else array_y - radius
+		end_xi = self.car_lookup.shape[1] if array_x + radius + 1 > self.car_lookup.shape[1] else array_x + radius + 1
+		end_yi = self.car_lookup.shape[0] if array_y + radius + 1 > self.car_lookup.shape[0] else array_y + radius + 1
+		return np.argwhere(self.car_lookup[start_yi:end_yi, start_xi:end_xi, :] == 1)
 
 	def get_car_at_index(self, index=0):
 		if index < len(self.cars):
@@ -743,13 +752,11 @@ class Car:
 		self.speed = 0
 		self.steering = 0
 		self.steering_unit = math.pi / 30.0
-		self.pos = (canvas.size[0] / 2.0 + np.random.randint(400) - 200, canvas.size[1] / 2.0 + np.random.randint(400) - 200)
 		self.state = Car.STATE_NORMAL
-		self.prev_lookup_xi = -1
-		self.prev_lookup_yi = -1
+		self.pos = (canvas.size[0] / 2.0 + np.random.randint(400) - 200, canvas.size[1] / 2.0 + np.random.randint(400) - 200)
+		self.prev_lookup_xi, self.prev_lookup_yi = field.compute_array_index_from_position(self.pos[0], self.pos[1])
 		self.id = Car.id_seed
 		Car.id_seed += 1
-		print self.id
 
 	def compute_gl_attributes(self):
 		xi, yi = field.compute_array_index_from_position(self.pos[0], self.pos[1])
@@ -794,9 +801,14 @@ class Car:
 		# 遠距離
 		blocks = field.surrounding_wal_indicis(xi, yi, 3)
 		for block in blocks:
+			print block
 			i = Car.far_lookup[block[0]][block[1]]
 			if i != -1:
 				values[i + 24] = 1.0
+
+		# 他の車
+		blocks = cars.surrounding_lookup_indicis(xi, yi, 1)
+
 
 		# 車体の向きに合わせる
 		area = int(self.steering / math.pi * 4.0)
@@ -840,7 +852,10 @@ class Car:
 		xi, yi = field.compute_array_index_from_position(self.pos[0], self.pos[1])
 		if xi == self.prev_lookup_xi and yi == self.prev_lookup_yi:
 			return
-		self.car_lookup[:,:,self.id] = 0
+		cars.car_lookup[self.prev_lookup_yi,self.prev_lookup_xi,self.id] = 0
+		cars.car_lookup[yi, xi, self.id] = 1
+		self.prev_lookup_xi = xi
+		self.prev_lookup_yi = yi
 
 	# アクセル
 	def action_throttle(self):
@@ -889,8 +904,12 @@ class Canvas(app.Canvas):
 
 	def on_mouse_move(self, event):
 		self.toggle_wall(event.pos)
+		car = cars.get_car_at_index(0)
+		car.pos = event.pos[0], event.pos[1]
 
 	def on_mouse_wheel(self, event):
+		car = cars.get_car_at_index(0)
+		car.action_steer_right()
 		pass
 
 	def toggle_wall(self, pos):
