@@ -29,8 +29,11 @@ color_gui_grid = 0.4 * color_black + 0.5 * color_gui_grid_base
 color_gui_sensor_red = np.asarray((247.0 / 255.0, 121.0 / 255.0, 71.0 / 255.0, 1.0))
 color_gui_sensor_yellow = np.asarray((212.0 / 255.0, 219.0 / 255.0, 185.0 / 255.0, 1.0))
 color_gui_sensor_blue = np.asarray((107.0 / 255.0, 189.0 / 255.0, 205.0 / 255.0, 1.0))
-color_gui_sensor_line = color_gui_grid_highlighted
+color_gui_sensor_line = 0.4 * color_black + 0.6 * color_gui_grid_base
 color_gui_sensor_line_highlight = np.asarray((39.0 / 255.0, 68.0 / 255.0, 74.0 / 255.0, 1.0))
+color_car_normal = color_gui_sensor_yellow
+color_car_crashed = np.asarray((147.0 / 255.0, 0.0 / 255.0, 0.0 / 255.0, 1.0))
+color_car_reward = color_gui_sensor_blue
 
 
 # シェーダ
@@ -105,6 +108,26 @@ void main() {
 }
 """
 
+
+car_vertex = """
+attribute vec2 position;
+attribute vec4 color;
+varying vec4 v_color;
+
+void main() {
+	v_color = color;
+	gl_Position = vec4(position, 0.0, 1.0);
+}
+"""
+
+car_fragment = """
+varying vec4 v_color;
+
+void main() {
+	gl_FragColor = v_color;
+}
+"""
+
 gui_grid_vertex = """
 attribute vec2 position;
 attribute float highlighted;
@@ -153,7 +176,7 @@ const float M_PI = 3.14159265358979323846;
 float atan2(in float y, in float x)
 {
 	float result = atan(y, x) + M_PI;
-	return result / M_PI / 2.0;
+	return 1.0 - mod(result + M_PI / 2.0, M_PI * 2.0) / M_PI / 2.0;
 	//bool s = (abs(x) > abs(y));
 	//float result = mix(M_PI / 2.0 - atan(x, y), atan(y, x) + M_PI / 2.0, float(s));
 	//return result;
@@ -161,23 +184,91 @@ float atan2(in float y, in float x)
 
 void main() {
 	vec2 coord = gl_FragCoord.xy;
-	const float OUTER_RADIUS_RATIO = 0.8;
-	const float COVRE_RADIUS_RATIO = 0.7;
-	float outer_radius = u_size.x / 2.0 * OUTER_RADIUS_RATIO;
-	const float OUTER_LINE_WIDTH = 1.5;
-
-	// Cover
 	float d = distance(coord, u_center);
-	float diff = d - outer_radius;
 	vec2 local = coord - u_center;
-	if(diff <= OUTER_LINE_WIDTH && diff >= -OUTER_LINE_WIDTH){
-		diff /= OUTER_LINE_WIDTH;
-		float rad = atan2(local.y, local.x);
-		//float alpha = (1.0 - abs(0.5 - fract((rad + M_PI / 8.0) * 4.0)));
-		//vec4 color = alpha * line_color + (1.0 - alpha) * bg_color;
+	float rad = atan2(local.y, local.x);
+
+	// #1
+	float radius = u_size.x / 2.0 * 0.8;
+	float diff = d - radius;
+	float line_width = 1.5;
+	if(abs(diff) <= line_width){
+		diff /= line_width;
+		vec4 frag_color = mix(vec4(line_color.rgb, fract(1 + diff)), vec4(line_color.rgb, 1.0 - fract(diff)), float(diff > 0));
+		frag_color.a = mix(0.0, frag_color.a, float(rad > 0.5));
+		gl_FragColor = frag_color;
+		return;
+	}
+
+	// #2
+	radius = u_size.x / 2.0 * 0.7;
+	diff = d - radius;
+	if(abs(diff) <= line_width){
+		diff /= line_width;
 		gl_FragColor = mix(vec4(line_color.rgb, fract(1 + diff)), vec4(line_color.rgb, 1.0 - fract(diff)), float(diff > 0));
 		return;
 	}
+
+	// far
+	radius = u_size.x / 2.0 * 0.6;
+	diff = d - radius;
+	line_width = 6;
+	float segments = 24.0;
+	if(abs(diff) <= line_width / 2.0){
+		vec4 result;
+		if(diff >= 0){
+			diff -= (line_width / 2.0 - 1.0);
+			result = mix(vec4(far_color.rgb, 1.0 - fract(diff)), far_color, float(diff < 0));
+		}else{
+			diff += line_width / 2.0;
+			result = mix(vec4(far_color.rgb, fract(1 + diff)), far_color, float(diff >= 1));
+		}
+		int index = int(fract(rad + 1.0 / segments / 2.0) * segments);
+		float rat = far[index];
+		gl_FragColor = mix(vec4(line_highlighted_color.rgb, result.a), result, rat);
+		return;
+	}
+
+	// mid
+	radius = u_size.x / 2.0 * 0.5;
+	diff = d - radius;
+	line_width = 6;
+	segments = 16.0;
+	if(abs(diff) <= line_width / 2.0){
+		vec4 result;
+		if(diff >= 0){
+			diff -= (line_width / 2.0 - 1.0);
+			result = mix(vec4(mid_color.rgb, 1.0 - fract(diff)), mid_color, float(diff < 0));
+		}else{
+			diff += line_width / 2.0;
+			result = mix(vec4(mid_color.rgb, fract(1 + diff)), mid_color, float(diff >= 1));
+		}
+		int index = int(fract(rad + 1.0 / segments / 2.0) * segments);
+		float rat = mid[index];
+		gl_FragColor = mix(vec4(line_highlighted_color.rgb, result.a), result, rat);
+		return;
+	}
+
+	// near
+	radius = u_size.x / 2.0 * 0.4;
+	diff = d - radius;
+	line_width = 6;
+	segments = 8.0;
+	if(abs(diff) <= line_width / 2.0){
+		vec4 result;
+		if(diff >= 0){
+			diff -= (line_width / 2.0 - 1.0);
+			result = mix(vec4(near_color.rgb, 1.0 - fract(diff)), near_color, float(diff < 0));
+		}else{
+			diff += line_width / 2.0;
+			result = mix(vec4(near_color.rgb, fract(1 + diff)), near_color, float(diff >= 1));
+		}
+		int index = int(fract(rad + 1.0 / segments / 2.0) * segments);
+		float rat = near[index];
+		gl_FragColor = mix(vec4(line_highlighted_color.rgb, result.a), result, rat);
+		return;
+	}
+
 }
 """
 
@@ -193,6 +284,7 @@ class Field:
 		self.px = 80
 		self.py = 120
 
+		self.needs_display = True
 		self.grid_subdiv_bg, self.grid_subdiv_wall = self.load()
 
 		self.program_grid_point = gloo.Program(field_point_vertex, field_point_fragment)
@@ -214,6 +306,8 @@ class Field:
 		end_yi = self.grid_subdiv_wall.shape[0] if array_y + radius + 1 > self.grid_subdiv_wall.shape[0] else array_y + radius + 1
 		return np.argwhere(self.grid_subdiv_wall[start_yi:end_yi, start_xi:end_xi] == 1)
 
+	def set_needs_display(self):
+		self.needs_display = True
 
 	def load(self):
 		# 背景
@@ -265,15 +359,16 @@ class Field:
 	def is_screen_position_inside_field(self, pixel_x, pixel_y, grid_width=None, grid_height=None):
 		if grid_width is None or grid_height is None:
 			grid_width, grid_height = self.comput_grid_size()
+		_, screen_height = canvas.size
 		subdivision_width = grid_width / float(self.n_grid_w) / 4.0
 		subdivision_height = grid_height / float(self.n_grid_h) / 4.0
 		if pixel_x < self.px - subdivision_width * 2:
 			return False
 		if pixel_x > self.px + grid_width + subdivision_width * 2:
 			return False
-		if pixel_y < self.py - subdivision_height * 2:
+		if pixel_y < screen_height - self.py - grid_height - subdivision_height * 2:
 			return False
-		if pixel_y > self.py + grid_height + subdivision_height * 2:
+		if pixel_y > screen_height - self.py + subdivision_height * 2:
 			return False
 		return True
 
@@ -281,10 +376,11 @@ class Field:
 		grid_width, grid_height = self.comput_grid_size()
 		if self.is_screen_position_inside_field(pixel_x, pixel_y, grid_width=grid_width, grid_height=grid_height) is False:
 			return -1, -1
+		_, screen_height = canvas.size
 		subdivision_width = grid_width / float(self.n_grid_w) / 4.0
 		subdivision_height = grid_height / float(self.n_grid_h) / 4.0
 		x = pixel_x - self.px + subdivision_width * 2
-		y = pixel_y - self.py + subdivision_height * 2
+		y = pixel_y - (screen_height - self.py - grid_height - subdivision_height * 2)
 		return int(x / subdivision_width), self.grid_subdiv_wall.shape[0] - int(y / subdivision_height) - 1
 
 	def is_wall(self, array_x, array_y):
@@ -338,6 +434,7 @@ class Field:
 		if array_y >= self.grid_subdiv_wall.shape[0]:
 			return
 		self.grid_subdiv_wall[array_y, array_x] = 1
+		self.set_needs_display()
 
 	def destroy_wall_at_index(self, array_x, array_y):
 		if array_x < 2:
@@ -349,6 +446,7 @@ class Field:
 		if array_y >= self.grid_subdiv_wall.shape[0] - 2:
 			return
 		self.grid_subdiv_wall[array_y, array_x] = 0
+		self.set_needs_display()
 
 	def set_positions(self):
 		np.random.seed(0)
@@ -430,14 +528,15 @@ class Field:
 		self.program_bg["is_wall"] = np.asarray(is_wall, dtype=np.float32)
 
 	def draw(self):
-		self.set_positions()
+		if self.needs_display:
+			self.needs_display = False
+			self.set_positions()
 		self.program_bg.draw("triangles")
 		if self.enable_grid:
 			self.program_subdiv_point.draw("points")
 			self.program_grid_point.draw("points")
 
 	def draw_wall(self):
-
 		self.program_wall.draw("triangles")
 
 class Gui():
@@ -590,6 +689,18 @@ class CarManager:
 		self.cars = []
 		for i in xrange(initial_num_car):
 			self.cars.append(Car())
+		self.program = gloo.Program(car_vertex, car_fragment)
+
+	def draw(self):
+		positions = []
+		colors = []
+		for car in self.cars:
+			p, c = car.compute_gl_attributes()
+			positions.extend(p)
+			colors.extend(c)
+		self.program["position"] = positions
+		self.program["color"] = colors
+		self.program.draw("lines")
 
 	def get_car_at_index(self, index=0):
 		if index < len(self.cars):
@@ -600,11 +711,41 @@ class Car:
 	near_lookup = np.array([[5, 4, 3], [6, -1, 2], [7, 0, 1]])
 	mid_lookup = np.array([[10, 9, 8, 7, 6], [11, -1, -1, -1, 5], [12, -1, -1, -1, 4], [13, -1, -1, -1, 3], [14, 15, 0, 1, 2]])
 	far_lookup = np.array([[15, 14, 13, 12, 11, 10, 9], [16, -1, -1, -1, -1, -1, 8], [17, -1, -1, -1, -1, -1, 7], [18, -1, -1, -1, -1, -1, 6], [19, -1, -1, -1, -1, -1, 5], [20, -1, -1, -1, -1, -1, 4], [21, 22, 23, 0, 1, 2, 3]])
+	car_width = 12.0
+	car_height = 16.0
+	shape = [(-car_width/2.0, car_height/2.0), (car_width/2.0, car_height/2.0),
+				(car_width/2.0, car_height/2.0), (car_width/2.0, -car_height/2.0),
+				(car_width/2.0, -car_height/2.0), (-car_width/2.0, -car_height/2.0),
+				(-car_width/2.0, -car_height/2.0), (-car_width/2.0, car_height/2.0),
+				(0.0, car_height/2.0+1.0), (0.0, 1.0)]
+
+	STATE_NORMAL = 0
+	STATE_CRASHED = 1
 	def __init__(self):
 		self.speed = 0
 		self.steering = 0
 		self.steering_unit = math.pi / 30.0
 		self.pos = (0, 0)
+
+	def compute_gl_attributes(self):
+		xi, yi = field.compute_array_index_from_position(self.pos[0], self.pos[1])
+		sw, sh = canvas.size
+		crashed = False
+		if field.is_wall(xi, yi):
+			crashed = True
+		cos = math.cos(-self.steering)
+		sin = math.sin(-self.steering)
+		positions = []
+		colors = []
+		for x, y in Car.shape:
+			_x = 2.0 * (x * cos - y * sin + self.pos[0]) / sw - 1
+			_y = 2.0 * (x * sin + y * cos + (sh - self.pos[1])) / sh - 1
+			positions.append((_x, _y))
+			if crashed:
+				colors.append(color_car_crashed)
+			else:
+				colors.append(color_car_normal)
+		return positions, colors
 
 	def respawn(self):
 		pass
@@ -682,6 +823,8 @@ class Canvas(app.Canvas):
 		gloo.set_viewport(0, 0, *self.physical_size)
 		field.draw()
 		gui.draw()
+		cars.draw()
+		self.update()
 
 	def on_resize(self, event):
 		self.activate_zoom()
@@ -696,12 +839,12 @@ class Canvas(app.Canvas):
 
 	def on_mouse_move(self, event):
 		self.toggle_wall(event.pos)
+		car = cars.get_car_at_index(0)
 		car.pos = event.pos[0], event.pos[1]
-		gui.draw_sensor()
 
 	def on_mouse_wheel(self, event):
+		car = cars.get_car_at_index(0)
 		car.action_steer_right()
-		gui.draw_sensor()
 
 	def toggle_wall(self, pos):
 		if self.is_mouse_pressed:
@@ -711,8 +854,6 @@ class Canvas(app.Canvas):
 					field.destroy_wall_at_index(x, y)
 				else:
 					field.construct_wall_at_index(x, y)
-				self.update()
-
 
 	def on_key_press(self, event):
 		if event.key == "Shift":
@@ -727,13 +868,14 @@ class Canvas(app.Canvas):
 		gloo.set_viewport(0, 0, *self.physical_size)
 		vp = (0, 0, self.physical_size[0], self.physical_size[1])
 		gui.configure(canvas=self, viewport=vp)
+		field.set_needs_display()
 
 if __name__ == "__main__":
 	canvas = Canvas()
 	gui = Gui()
 	field = Field()
 	cars = CarManager()
-	car = Car()
 	canvas.activate_zoom()
 	canvas.show()
+	canvas.measure_fps()
 	app.run()
