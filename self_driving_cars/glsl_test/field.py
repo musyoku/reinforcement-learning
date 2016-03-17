@@ -135,7 +135,9 @@ void main() {
 """
 
 gui_sensor_fragment = """
-uniform vec2 center;
+uniform vec2 screen_size;
+uniform vec2 u_center;
+uniform vec2 u_size;
 uniform float near[8];
 uniform float mid[16];
 uniform float far[24];
@@ -146,19 +148,35 @@ uniform vec4 bg_color;
 uniform vec4 line_color;
 uniform vec4 line_highlighted_color;
 
+const float M_PI = 3.14159265358979323846;
+
+float atan2(in float y, in float x)
+{
+	float result = atan(y, x) + M_PI;
+	return result / M_PI / 2.0;
+	//bool s = (abs(x) > abs(y));
+	//float result = mix(M_PI / 2.0 - atan(x, y), atan(y, x) + M_PI / 2.0, float(s));
+	//return result;
+}
+
 void main() {
 	vec2 coord = gl_FragCoord.xy;
-	const float outer_radius = 100;
-	const float outer_line_width = 1;
-	float d = distance(coord, center);
-	float tmp = d - outer_radius;
-	if(tmp < -outer_line_width || tmp > outer_line_width){
-		discard;
-	}
-	if(tmp > 0){
-		gl_FragColor = mix(line_color, bg_color, fract(tmp));
-	}else{
-		gl_FragColor = mix(bg_color, line_color, fract(1 + tmp));
+	const float OUTER_RADIUS_RATIO = 0.8;
+	const float COVRE_RADIUS_RATIO = 0.7;
+	float outer_radius = u_size.x / 2.0 * OUTER_RADIUS_RATIO;
+	const float OUTER_LINE_WIDTH = 1.5;
+
+	// Cover
+	float d = distance(coord, u_center);
+	float diff = d - outer_radius;
+	vec2 local = coord - u_center;
+	if(diff <= OUTER_LINE_WIDTH && diff >= -OUTER_LINE_WIDTH){
+		diff /= OUTER_LINE_WIDTH;
+		float rad = atan2(local.y, local.x);
+		//float alpha = (1.0 - abs(0.5 - fract((rad + M_PI / 8.0) * 4.0)));
+		//vec4 color = alpha * line_color + (1.0 - alpha) * bg_color;
+		gl_FragColor = mix(vec4(line_color.rgb, fract(1 + diff)), vec4(line_color.rgb, 1.0 - fract(diff)), float(diff > 0));
+		return;
 	}
 }
 """
@@ -443,6 +461,7 @@ class Gui():
 		self.program_sensor["bg_color"] = color_black
 		self.program_sensor["line_color"] = color_gui_sensor_line
 		self.program_sensor["line_highlighted_color"] = color_gui_sensor_line_highlight
+		self.program_sensor["screen_size"] = canvas.size
 
 		self.color_hex_str_text = "#6bbdcd"
 		self.color_hex_str_text_highlighted = "#a0c6c3"
@@ -552,7 +571,8 @@ class Gui():
 		width = sgw * 10 / sw * 2.0
 		height = sgh * 10 / sh * 2.0
 		center = (field.px + lw + sgw * 8.0, field.py + sgh * 3.0)
-		self.program_sensor["center"] = center
+		self.program_sensor["u_center"] = center
+		self.program_sensor["u_size"] = sgw * 10, sgh * 10
 		positions = []
 		positions.append((base_x, base_y))
 		positions.append((base_x + width, base_y))
