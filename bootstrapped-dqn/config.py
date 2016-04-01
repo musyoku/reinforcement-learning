@@ -37,7 +37,7 @@ class Config:
 		## e.g 500(input vector)->250->100(output vector)
 		## self.q_fc_units = [500, 250, 100]
 		## For DQN / Double DQN / DDQN + Dueling Network
-		self.q_fc_units = [self.rl_chain_length, 50]
+		self.q_fc_units = [self.rl_chain_length, 50, len(self.actions)]
 		## For Bootstrapped DQN
 		self.q_bootstrapped_shared_fc_units = [self.rl_chain_length, 50]
 		self.q_bootstrapped_head_fc_units = [self.q_bootstrapped_shared_fc_units[-1], 50, len(self.actions)]
@@ -61,10 +61,12 @@ class Config:
 	def check(self):
 		if self.q_fc_activation_function not in activations:
 			raise Exception("Invalid activation function for q_fc_activation_function.")
-		if len(self.q_fc_hidden_units) == 0:
+		if len(self.q_fc_units) < 3:
 			raise Exception("You need to add one or more hidden layers.")
-		if self.rl_model not in ["dqn", "double_dqn", "dueling_double_dqn", "bootstrapped_dqn"]:
-			raise Exception("Invalid model.")
+		if len(self.q_bootstrapped_shared_fc_units) < 2:
+			raise Exception("You need to add one or more hidden layers.")
+		if len(self.q_bootstrapped_head_fc_units) < 3:
+			raise Exception("You need to add one or more hidden layers.")
 		if self.rl_replay_start_size > self.rl_replay_memory_size:
 			self.rl_replay_start_size = self.rl_replay_memory_size
 

@@ -2,7 +2,7 @@
 import os
 import numpy as np
 import chainer, math, copy, os
-from chainer import cuda, Variable, optimizers, serializers, optimizer, function
+from chainer import cuda, Variable, optimizers, serializers, function
 from chainer.utils import type_check
 from chainer import functions as F
 from chainer import links as L
@@ -15,7 +15,7 @@ except:
 	pass
 
 def load():
-	available_models = ["dqn", "double_dqn", "dueling_double_dqn", ""]
+	available_models = ["dqn", "double_dqn", "dueling_double_dqn", "bootstrapped_dqn"]
 	if config.rl_model not in available_models:
 		raise Exception("specified model is not available.")
 	if config.rl_model == "dqn":
@@ -69,7 +69,7 @@ class Model:
 
 		# Replay Memory
 		## (state, action, reward, next_state, episode_ends)
-		shape_state = (config.rl_replay_memory_size, config.rl_history_length, 34)
+		shape_state = (config.rl_replay_memory_size, config.rl_chain_length)
 		shape_action = (config.rl_replay_memory_size,)
 		self.replay_memory = [
 			np.zeros(shape_state, dtype=np.float32),
@@ -81,6 +81,14 @@ class Model:
 		
 	def store_transition_in_replay_memory(self, state, action, reward, next_state):
 		index = self.total_replay_memory % config.rl_replay_memory_size
+		if self.replay_memory[0][index].shape != state.shape:
+			raise Exception()
+		if self.replay_memory[1][index].shape != action.shape:
+			raise Exception()
+		if self.replay_memory[2][index].shape != reward.shape:
+			raise Exception()
+		if self.replay_memory[3][index].shape != next_state.shape:
+			raise Exception()
 		self.replay_memory[0][index] = state
 		self.replay_memory[1][index] = action
 		self.replay_memory[2][index] = reward
@@ -205,7 +213,7 @@ class DQN(Model):
 		else:
 			replay_index = np.random.randint(0, config.rl_replay_memory_size, (config.rl_minibatch_size, 1))
 
-		shape_state = (config.rl_minibatch_size, config.rl_history_length, 34)
+		shape_state = (config.rl_minibatch_size, config.rl_chain_length)
 		shape_action = (config.rl_minibatch_size,)
 
 		state = np.empty(shape_state, dtype=np.float32)
@@ -399,25 +407,61 @@ class DuelingDoubleDQN(DoubleDQN):
 class BootstrappedDQN(DQN):
 
 	def __init__(self):
-		Model.__init__(self)
+		self.exploration_rate = config.rl_initial_exploration
+
+		# Replay Memory
+		## (state, action, reward, next_state, episode_ends)
+		shape_state = (config.rl_replay_memory_size, config.rl_chain_length)
+		shape_action = (config.rl_replay_memory_size,)
+		shape_mask = (config.rl_replay_memory_size, config.q_k_heads)
+		self.replay_memory = [
+			np.zeros(shape_state, dtype=np.float32),
+			np.zeros(shape_action, dtype=np.uint8),
+			np.zeros(shape_action, dtype=np.float32),
+			np.zeros(shape_state, dtype=np.float32),
+			np.zeros(shape_mask, dtype=np.uint8),
+		]
+		self.total_replay_memory = 0
+
 
 		self.shared_fc = self.build_network(units=config.q_bootstrapped_shared_fc_units)
+		self.target_shared_fc = copy.deepcopy(self.shared_fc)
 		self.optimizer_shared_fc = optimizers.Adam(alpha=config.rl_learning_rate, beta1=config.rl_gradient_momentum)
 		self.optimizer_shared_fc.setup(self.shared_fc)
-		self.optimizer_shared_fc.add_hook(optimizer.GradientClipping(10.0))
+		self.optimizer_shared_fc.add_hook(chainer.optimizer.GradientClipping(10.0))
 
 		self.head_fc_array = []
+		self.target_head_fc_array = []
 		self.optimizer_head_fc_array = []
 		for n in xrange(config.q_k_heads):
 			network = self.build_network(units=config.q_bootstrapped_head_fc_units)
 			optimizer = optimizers.Adam(alpha=config.rl_learning_rate, beta1=config.rl_gradient_momentum)
 			optimizer.setup(network)
-			optimizer.add_hook(optimizer.GradientClipping(10.0))
+			optimizer.add_hook(chainer.optimizer.GradientClipping(10.0))
 			self.head_fc_array.append(network)
+			self.target_head_fc_array.append(copy.deepcopy(network))
 			self.optimizer_head_fc_array.append(optimizer)
 
 		self.load()
-		self.update_target()
+		
+	def store_transition_in_replay_memory(self, state, action, reward, next_state, mask):
+		index = self.total_replay_memory % config.rl_replay_memory_size
+		if self.replay_memory[0][index].shape != state.shape:
+			raise Exception()
+		if self.replay_memory[1][index].shape != action.shape:
+			raise Exception()
+		if self.replay_memory[2][index].shape != reward.shape:
+			raise Exception()
+		if self.replay_memory[3][index].shape != next_state.shape:
+			raise Exception()
+		if self.replay_memory[4][index].shape != mask.shape:
+			raise Exception()
+		self.replay_memory[0][index] = state
+		self.replay_memory[1][index] = action
+		self.replay_memory[2][index] = reward
+		self.replay_memory[3][index] = next_state
+		self.replay_memory[4][index] = mask
+		self.total_replay_memory += 1
 
 	def build_network(self, units=None):
 		if units is None:
@@ -442,6 +486,27 @@ class BootstrappedDQN(DQN):
 		if config.use_gpu:
 			fc.to_gpu()
 		return fc
+
+	def explore(self, state, k=0):
+		if state.ndim == 1:
+			state = state.reshape(1, -1)
+		action_batch, q_batch = self.explore_batch(state, k)
+		return action_batch[0], q_batch[0]
+
+	def explore_batch(self, state_batch, k=0):
+		if state_batch.ndim == 1:
+			state_batch = state_batch.reshape(1, -1)
+		state_batch = Variable(state_batch)
+		if config.use_gpu:
+			state_batch.to_gpu()
+		q_batch = self.compute_q_variable(state_batch, k, test=True)
+		if config.use_gpu:
+			q_batch.to_cpu()
+		q_batch = q_batch.data
+		action_batch = np.argmax(q_batch, axis=1)
+		for i in xrange(action_batch.shape[0]):
+			action_batch[i] = self.get_action_for_index(action_batch[i])
+		return action_batch, q_batch
 	
 	def forward_one_step(self, state, action, reward, next_state, test=False):
 		xp = cuda.cupy if config.use_gpu else np
@@ -457,7 +522,7 @@ class BootstrappedDQN(DQN):
 		if config.use_gpu:
 			max_action_indices = cuda.to_cpu(max_action_indices)
 
-		target_q = self.compute_target_q_variable(next_state, test=test)
+		target_q = self.compute_target_q_variable(next_state, test=True)
 
 		target = q.data.copy()
 
@@ -479,51 +544,63 @@ class BootstrappedDQN(DQN):
 
 	def optimizer_zero_grads(self):
 		self.optimizer_shared_fc.zero_grads()
-		for optimizer in enumerate(self.optimizer_head_fc_array)
+		for i, optimizer in enumerate(self.optimizer_head_fc_array):
 			optimizer.zero_grads()
 
 	def optimizer_update(self):
 		self.optimizer_fc_value.update()
 		self.optimizer_fc_advantage.update()
 
-	def compute_q_variable(self, state, test=False):
-		value = self.fc_value(state, test=test)
-		advantage = self.fc_advantage(state, test=test)
-		mean = F.sum(advantage, axis=1) / float(len(config.actions))
-		return self.aggregate(value, advantage, mean)
+	def compute_q_variable(self, state, k=0, test=False):
+		shared_output = self.shared_fc(state, test=test)
+		head = self.head_fc_array[k]
+		output = head(shared_output, test=test)
+		return output
 
-	def compute_target_q_variable(self, state, test=True):
-		value = self.target_fc_value(state, test=test)
-		advantage = self.target_fc_advantage(state, test=test)
-		mean = F.sum(advantage, axis=1) / float(len(config.actions))
-		return self.aggregate(value, advantage, mean)
+	def compute_target_q_variable(self, state, k=0, test=True):
+		shared_output = self.target_shared_fc(state, test=test)
+		head = self.target_head_fc_array[k]
+		output = head(shared_output, test=test)
+		return output
 
 	def update_target(self):
-		self.target_fc_value = copy.deepcopy(self.fc_value)
-		self.target_fc_advantage = copy.deepcopy(self.fc_advantage)
+		self.target_shared_fc = copy.deepcopy(self.shared_fc)
+		for i, network in enumerate(self.head_fc_array):
+			self.head_fc_array[i] = copy.deepcopy(self.head_fc_array[i])
 
 	def load(self):
-		filename = "fc_value.model"
+		dir = "model"
+		filename = dir + "/shared_fc.model"
 		if os.path.isfile(filename):
-			serializers.load_hdf5(filename, self.fc_value)
-			print "model fc_value loaded successfully."
-		filename = "fc_advantage.model"
+			serializers.load_hdf5(filename, self.shared_fc)
+			print "model shared_fc loaded successfully."
+
+		for i, network in enumerate(self.head_fc_array):
+			filename = dir + "/head_fc_%d.model" % i
+			if os.path.isfile(filename):
+				serializers.load_hdf5(filename, self.head_fc_array[i])
+				print "model %s loaded successfully." % filename
+
+		filename = dir + "/shared_fc.optimizer"
 		if os.path.isfile(filename):
-			serializers.load_hdf5(filename, self.fc_advantage)
-			print "model fc_advantage loaded successfully."
-		filename = "fc_value.optimizer"
-		if os.path.isfile(filename):
-			serializers.load_hdf5(filename, self.optimizer_fc_value)
-			print "optimizer fc_value loaded successfully."
-		filename = "fc_advantage.optimizer"
-		if os.path.isfile(filename):
-			serializers.load_hdf5(filename, self.optimizer_fc_advantage)
-			print "optimizer fc_advantage loaded successfully."
+			serializers.load_hdf5(filename, self.optimizer_shared_fc)
+			print "optimizer shared_fc loaded successfully."
+
+		for i, network in enumerate(self.optimizer_head_fc_array):
+			filename = dir + "/head_fc_%d.optimizer" % i
+			if os.path.isfile(filename):
+				serializers.load_hdf5(filename, self.optimizer_head_fc_array[i])
+				print "optimizer %s loaded successfully." % filename
 
 	def save(self):
-		serializers.save_hdf5("fc_value.model", self.fc_value)
-		serializers.save_hdf5("fc_advantage.model", self.fc_advantage)
+		dir = "model"
+		serializers.save_hdf5(dir + "/shared_fc.model", self.shared_fc)
+		for i, network in enumerate(self.head_fc_array):
+			filename = dir + "/head_fc_%d.model" % i
+			serializers.save_hdf5(filename, self.head_fc_array[i])
 		print "model saved."
-		serializers.save_hdf5("fc_value.optimizer", self.optimizer_fc_value)
-		serializers.save_hdf5("fc_advantage.optimizer", self.optimizer_fc_advantage)
+		serializers.save_hdf5(dir + "/shared_fc.optimizer", self.optimizer_shared_fc)
+		for i, network in enumerate(self.optimizer_head_fc_array):
+			filename = dir + "/head_fc_%d.optimizer" % i
+			serializers.save_hdf5(filename, self.optimizer_head_fc_array[i])
 		print "optimizer saved."
