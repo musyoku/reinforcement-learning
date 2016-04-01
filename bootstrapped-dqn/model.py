@@ -83,10 +83,6 @@ class Model:
 		index = self.total_replay_memory % config.rl_replay_memory_size
 		if self.replay_memory[0][index].shape != state.shape:
 			raise Exception()
-		if self.replay_memory[1][index].shape != action.shape:
-			raise Exception()
-		if self.replay_memory[2][index].shape != reward.shape:
-			raise Exception()
 		if self.replay_memory[3][index].shape != next_state.shape:
 			raise Exception()
 		self.replay_memory[0][index] = state
@@ -448,10 +444,6 @@ class BootstrappedDQN(DQN):
 		index = self.total_replay_memory % config.rl_replay_memory_size
 		if self.replay_memory[0][index].shape != state.shape:
 			raise Exception()
-		if self.replay_memory[1][index].shape != action.shape:
-			raise Exception()
-		if self.replay_memory[2][index].shape != reward.shape:
-			raise Exception()
 		if self.replay_memory[3][index].shape != next_state.shape:
 			raise Exception()
 		if self.replay_memory[4][index].shape != mask.shape:
@@ -508,21 +500,21 @@ class BootstrappedDQN(DQN):
 			action_batch[i] = self.get_action_for_index(action_batch[i])
 		return action_batch, q_batch
 	
-	def forward_one_step(self, state, action, reward, next_state, test=False):
+	def forward_one_step(self, state, action, reward, next_state, mask, test=False):
 		xp = cuda.cupy if config.use_gpu else np
 		n_batch = state.shape[0]
-		state = Variable(state.reshape((n_batch, config.rl_history_length * 34)))
-		next_state = Variable(next_state.reshape((n_batch, config.rl_history_length * 34)))
+		state = Variable(state)
+		next_state = Variable(next_state)
 		if config.use_gpu:
 			state.to_gpu()
 			next_state.to_gpu()
-		q = self.compute_q_variable(state, test=test)
-		q_ = self.compute_q_variable(next_state, test=test)
+		q = self.compute_q_variable_of_all_head(state, test=test)
+		q_ = self.compute_q_variable_of_all_head(next_state, test=test)
 		max_action_indices = xp.argmax(q_.data, axis=1)
 		if config.use_gpu:
 			max_action_indices = cuda.to_cpu(max_action_indices)
 
-		target_q = self.compute_target_q_variable(next_state, test=True)
+		target_q = self.compute_target_q_variable_of_all_head(next_state, test=True)
 
 		target = q.data.copy()
 
@@ -541,6 +533,36 @@ class BootstrappedDQN(DQN):
 		target = Variable(target)
 		loss = F.mean_squared_error(target, q)
 		return loss, q
+
+	def replay_experience(self):
+		if self.total_replay_memory == 0:
+			return
+		if self.total_replay_memory < config.rl_replay_memory_size:
+			replay_index = np.random.randint(0, self.total_replay_memory, (config.rl_minibatch_size, 1))
+		else:
+			replay_index = np.random.randint(0, config.rl_replay_memory_size, (config.rl_minibatch_size, 1))
+
+		shape_state = (config.rl_minibatch_size, config.rl_chain_length)
+		shape_action = (config.rl_minibatch_size,)
+		shape_mask = (config.rl_replay_memory_size, config.q_k_heads)
+
+		state = np.empty(shape_state, dtype=np.float32)
+		action = np.empty(shape_action, dtype=np.uint8)
+		reward = np.empty(shape_action, dtype=np.int8)
+		next_state = np.empty(shape_state, dtype=np.float32)
+		mask = np.empty(shape_mask, dtype=np.int8)
+		for i in xrange(config.rl_minibatch_size):
+			state[i] = self.replay_memory[0][replay_index[i]]
+			action[i] = self.replay_memory[1][replay_index[i]]
+			reward[i] = self.replay_memory[2][replay_index[i]]
+			next_state[i] = self.replay_memory[3][replay_index[i]]
+			mask[i] = self.replay_memory[4][replay_index[i]]
+
+		self.optimizer_zero_grads()
+		loss, _ = self.forward_one_step(state, action, reward, next_state, mask, test=False)
+		loss.backward()
+		self.optimizer_update()
+		return loss
 
 	def optimizer_zero_grads(self):
 		self.optimizer_shared_fc.zero_grads()
@@ -562,6 +584,20 @@ class BootstrappedDQN(DQN):
 		head = self.target_head_fc_array[k]
 		output = head(shared_output, test=test)
 		return output
+
+	def compute_q_variable_of_all_head(self, state, test=False):
+		shared_output = self.shared_fc(state, test=test)
+		q_array = []
+		for i, head in enumerate(self.head_fc_array):
+			q_array.append(head(shared_output))
+		return q_array
+
+	def compute_target_q_variable_of_all_head(self, state, test=True):
+		shared_output = self.target_shared_fc(state, test=test)
+		q_array = []
+		for i, head in enumerate(self.target_head_fc_array):
+			q_array.append(head(shared_output))
+		return q_array
 
 	def update_target(self):
 		self.target_shared_fc = copy.deepcopy(self.shared_fc)

@@ -11,18 +11,23 @@ model = model.load()
 env = Environment()
 
 max_episode = 2000
+total_steps = 0
 
 if config.rl_model in ["bootstrapped_dqn"]:
 	for episode in xrange(max_episode):
 		env.init()
-		print "episode", episode
 		k = np.random.randint(0, len(config.actions))
-		print k
+		print "episode:", episode, "k:", k
 		while True:
 			state = env.get_current_state()
 			action, q = model.explore(state, k)
-			print action, q
-			new_state, reward, episode_ends = env.agent_step(action)
+			next_state, reward, episode_ends = env.agent_step(action)
+			mask = np.random.binomial(1, config.q_p_mask_sampling, (config.q_k_heads,))
+			total_steps += 1
+			print action, q, mask
+			model.store_transition_in_replay_memory(state, action, reward, next_state, mask)
+			if total_steps % config.rl_update_frequency == 0:
+				model.replay_experience()
 			if episode_ends is True:
 				break
 else:
