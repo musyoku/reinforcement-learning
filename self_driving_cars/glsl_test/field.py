@@ -28,7 +28,7 @@ color_gui_text = np.asarray((107.0 / 255.0, 189.0 / 255.0, 205.0 / 255.0, 1.0))
 color_gui_grid_base = np.asarray((155.0 / 255.0, 234.0 / 255.0, 247.0 / 255.0, 1.0))
 color_gui_grid_highlighted = 0.2 * color_black + 0.8 * color_gui_grid_base
 color_gui_grid = 0.4 * color_black + 0.5 * color_gui_grid_base
-color_gui_sensor_red = np.asarray((247.0 / 255.0, 121.0 / 255.0, 71.0 / 255.0, 1.0))
+color_gui_sensor_red = np.asarray((247.0 / 255.0, 101.0 / 255.0, 51.0 / 255.0, 1.0))
 color_gui_sensor_yellow = np.asarray((212.0 / 255.0, 219.0 / 255.0, 185.0 / 255.0, 1.0))
 color_gui_sensor_blue = np.asarray((107.0 / 255.0, 189.0 / 255.0, 205.0 / 255.0, 1.0))
 color_gui_sensor_line = 0.4 * color_black + 0.6 * color_gui_grid_base
@@ -103,9 +103,9 @@ void main() {
 	vec2 coord = gl_FragCoord.xy / screen_size;
 	float x = cos_theta * coord.x - sin_theta * coord.y;
 	float f = fract(x * NUM_LINES);
-	vec4 wall_highlighted_color = 0.5 * v_bg_color + 0.5 * v_wall_color;
-	vec4 wall_color = 0.8 * v_bg_color + 0.2 * v_wall_color;
-	vec4 result = mix(wall_highlighted_color, wall_color, float(f < 0.4));
+	vec4 wall_highlighted_color = vec4(v_wall_color.rgb, 0.3);
+	vec4 wall_color = vec4(v_wall_color.rgb, 0.7);
+	vec4 result = mix(wall_color, wall_highlighted_color, float(f < 0.4));
 	gl_FragColor = mix(result, bg_color, float(v_is_wall == 0));
 }
 """
@@ -750,7 +750,7 @@ class CarManager:
 class Car:
 	lookup = np.array([[39, 38, 37, 36, 35, 34, 33], [40, 18, 17, 16, 15, 14, 32], [41, 19, 5, 4, 3, 13, 31], [42, 20, 6, -1, 2, 12, 30], [43, 21, 7, 0, 1, 11, 29], [44, 22, 23, 8, 9, 10, 28], [45, 46, 47, 24, 25, 26, 27]])
 	car_width = 12.0
-	car_height = 18.0
+	car_height = 20.0
 	STATE_NORMAL = 0
 	STATE_REWARD = 1
 	STATE_CRASHED = 2
@@ -855,11 +855,11 @@ class Car:
 		y = cos * self.speed
 		sensors = self.get_sensor_value()
 		self.state = Car.STATE_NORMAL
-		if np.amax(sensors[[0, 1, 7]]) > 0.5 and self.speed > 0:
+		if sensors[0] > 0 and self.speed > 0:
 			self.speed = 0
 			self.state = Car.STATE_CRASHED
 			return
-		if np.amax(sensors[[3, 4, 5]]) > 0.5 and self.speed < 0:
+		if sensors[4] > 0 and self.speed < 0:
 			self.speed = 0
 			self.state = Car.STATE_CRASHED
 			return
