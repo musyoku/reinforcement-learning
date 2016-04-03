@@ -120,29 +120,22 @@ class DQN(Model):
 	def __init__(self):
 		Model.__init__(self)
 
-		self.fc = self.build_network(output_dim=len(config.actions))
+		self.fc = self.build_network()
 
 		self.optimizer_fc = optimizers.Adam(alpha=config.rl_learning_rate, beta1=config.rl_gradient_momentum)
 		self.optimizer_fc.setup(self.fc)
-		self.optimizer_fc.add_hook(optimizer.GradientClipping(10.0))
+		self.optimizer_fc.add_hook(chainer.optimizer.GradientClipping(10.0))
 
 		self.load()
 		self.update_target()
 
-	def build_network(self, input_ndim=None, fc_hidden_units=None, output_ndim=1):
+	def build_network(self):
 		config.check()
-		if fc_hidden_units is None:
-			fc_hidden_units = config.q_fc_hidden_units
-		if input_ndim is None:
-			input_ndim = config.rl_chain_length
-
 		wscale = config.q_wscale
 
 		# Fully connected part of Q-Network
 		fc_attributes = {}
-		fc_units = [(input_ndim, fc_hidden_units[0])]
-		fc_units += zip(fc_hidden_units[:-1], fc_hidden_units[1:])
-		fc_units += [(fc_hidden_units[-1], output_ndim)]
+		fc_units = zip(config.q_fc_units[:-1], config.q_fc_units[1:])
 
 		for i, (n_in, n_out) in enumerate(fc_units):
 			fc_attributes["layer_%i" % i] = L.Linear(n_in, n_out, wscale=wscale)
@@ -239,7 +232,7 @@ class DQN(Model):
 		loss, _ = self.forward_one_step(state, action, reward, next_state, test=False)
 		loss.backward()
 		self.optimizer_update()
-		return loss
+		return loss.data
 
 	def optimizer_zero_grads(self):
 		self.optimizer_fc.zero_grads()
@@ -257,19 +250,22 @@ class DQN(Model):
 		self.target_fc = copy.deepcopy(self.fc)
 
 	def load(self):
-		filename = "fc.model"
+		dir = "model"
+		filename = dir + "/dqn_fc.model"
 		if os.path.isfile(filename):
 			serializers.load_hdf5(filename, self.fc)
 			print "model loaded successfully."
-		filename = "fc.optimizer"
+		dir = "model"
+		filename = dir + "/dqn_fc.optimizer"
 		if os.path.isfile(filename):
 			serializers.load_hdf5(filename, self.optimizer_fc)
 			print "optimizer loaded successfully."
 
 	def save(self):
-		serializers.save_hdf5("fc.model", self.fc)
+		dir = "model"
+		serializers.save_hdf5(dir + "/dqn_fc.model", self.fc)
 		print "model saved."
-		serializers.save_hdf5("fc.optimizer", self.optimizer_fc)
+		serializers.save_hdf5(dir + "/dqn_fc.optimizer", self.optimizer_fc)
 		print "optimizer saved."
 
 class DoubleDQN(DQN):
@@ -277,8 +273,8 @@ class DoubleDQN(DQN):
 	def forward_one_step(self, state, action, reward, next_state, test=False):
 		xp = cuda.cupy if config.use_gpu else np
 		n_batch = state.shape[0]
-		state = Variable(state.reshape((n_batch, config.rl_history_length * 34)))
-		next_state = Variable(next_state.reshape((n_batch, config.rl_history_length * 34)))
+		state = Variable(state)
+		next_state = Variable(next_state)
 		if config.use_gpu:
 			state.to_gpu()
 			next_state.to_gpu()
@@ -553,37 +549,37 @@ class BootstrappedDoubleDQN(DQN):
 
 	def load(self):
 		dir = "model"
-		filename = dir + "/shared_fc.model"
+		filename = dir + "/bddqn_shared_fc.model"
 		if os.path.isfile(filename):
 			serializers.load_hdf5(filename, self.shared_fc)
 			print "model shared_fc loaded successfully."
 
 		for i, network in enumerate(self.head_fc_array):
-			filename = dir + "/head_fc_%d.model" % i
+			filename = dir + "/bddqn_head_fc_%d.model" % i
 			if os.path.isfile(filename):
 				serializers.load_hdf5(filename, self.head_fc_array[i])
 				print "model %s loaded successfully." % filename
 
-		filename = dir + "/shared_fc.optimizer"
+		filename = dir + "/bddqn_shared_fc.optimizer"
 		if os.path.isfile(filename):
 			serializers.load_hdf5(filename, self.optimizer_shared_fc)
 			print "optimizer shared_fc loaded successfully."
 
 		for i, network in enumerate(self.optimizer_head_fc_array):
-			filename = dir + "/head_fc_%d.optimizer" % i
+			filename = dir + "/bddqn_head_fc_%d.optimizer" % i
 			if os.path.isfile(filename):
 				serializers.load_hdf5(filename, self.optimizer_head_fc_array[i])
 				print "optimizer %s loaded successfully." % filename
 
 	def save(self):
 		dir = "model"
-		serializers.save_hdf5(dir + "/shared_fc.model", self.shared_fc)
+		serializers.save_hdf5(dir + "/bddqn_shared_fc.model", self.shared_fc)
 		for i, network in enumerate(self.head_fc_array):
-			filename = dir + "/head_fc_%d.model" % i
+			filename = dir + "/bddqn_head_fc_%d.model" % i
 			serializers.save_hdf5(filename, self.head_fc_array[i])
 		print "model saved."
-		serializers.save_hdf5(dir + "/shared_fc.optimizer", self.optimizer_shared_fc)
+		serializers.save_hdf5(dir + "/bddqn_shared_fc.optimizer", self.optimizer_shared_fc)
 		for i, network in enumerate(self.optimizer_head_fc_array):
-			filename = dir + "/head_fc_%d.optimizer" % i
+			filename = dir + "/bddqn_head_fc_%d.optimizer" % i
 			serializers.save_hdf5(filename, self.optimizer_head_fc_array[i])
 		print "optimizer saved."
