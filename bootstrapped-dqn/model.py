@@ -310,19 +310,16 @@ class DoubleDQN(DQN):
 
 		
 class GradientNormalizing(object):
-	name = 'GradientClipping'
+	name = 'GradientNormalizing'
 
 	def __init__(self, threshold):
 		self.threshold = threshold
 
 	def __call__(self, opt):
-		norm = numpy.sqrt(_sum_sqnorm([p.grad for p in opt.target.params()]))
-		rate = self.threshold / norm
-		if rate < 1:
-			for param in opt.target.params():
-				grad = param.grad
-				with cuda.get_device(grad):
-					grad *= rate
+		for param in opt.target.params():
+			grad = param.grad
+			with cuda.get_device(grad):
+				grad *= self.threshold
 
 class BootstrappedDoubleDQN(DQN):
 
@@ -349,6 +346,7 @@ class BootstrappedDoubleDQN(DQN):
 		self.optimizer_shared_fc = optimizers.Adam(alpha=config.rl_learning_rate, beta1=config.rl_gradient_momentum)
 		self.optimizer_shared_fc.setup(self.shared_fc)
 		self.optimizer_shared_fc.add_hook(chainer.optimizer.GradientClipping(10.0))
+		self.optimizer_shared_fc.add_hook(GradientNormalizing(1.0 / config.q_k_heads))
 
 		self.head_fc_array = []
 		self.target_head_fc_array = []
@@ -432,50 +430,60 @@ class BootstrappedDoubleDQN(DQN):
 		if config.use_gpu:
 			state.to_gpu()
 			next_state.to_gpu()
-		q_array = self.compute_q_variable_of_all_head(state, test=test)
-		next_q_array = self.compute_q_variable_of_all_head(next_state, test=test)
-		max_action_indices_array = self.compute_q_variable_of_all_head(next_q_array)
+		q_array = self.compute_q_variable_of_all_head(state, to_cpu=False, test=test)
+		next_q_array = self.compute_q_variable_of_all_head(next_state, to_cpu=False, test=test)
+		max_action_indices_array = self.argmax_q_variable_of_all_head(next_q_array, cpu=True)
 
 		target_q_array = self.compute_target_q_variable_of_all_head(next_state, test=test)
 
-		print mask
+		target_array = []
+		for i, q in enumerate(q_array):
+			target_array.append(q.data.copy())
 
-		target = q.data.copy()
+		sum_loss = 0
+		for k in xrange(config.q_k_heads):
+			max_action_indices = max_action_indices_array[k]
+			q = q_array[k]
+			target_q = target_q_array[k]
+			target = target_array[k]
+			for i in xrange(n_batch):
+				if mask[i,k] == 0:
+					continue
+				max_action_index = max_action_indices[i]
+				target_value = reward[i] + config.rl_discount_factor * target_q.data[i][max_action_indices[i]]
+				action_index = self.get_index_for_action(action[i])
+				old_value = target[i, action_index]
+				diff = target_value - old_value
+				if diff > 1.0:
+					target_value = 1.0 + old_value	
+				elif diff < -1.0:
+					target_value = -1.0 + old_value	
+				target[i, action_index] = target_value
+			target = Variable(target)
+			sum_loss += F.mean_squared_error(target, q)
 
-		for i in xrange(n_batch):
-			max_action_index = max_action_indices[i]
-			target_value = reward[i] + config.rl_discount_factor * target_q.data[i][max_action_indices[i]]
-			action_index = self.get_index_for_action(action[i])
-			old_value = target[i, action_index]
-			diff = target_value - old_value
-			if diff > 1.0:
-				target_value = 1.0 + old_value	
-			elif diff < -1.0:
-				target_value = -1.0 + old_value	
-			target[i, action_index] = target_value
-
-		target = Variable(target)
-		loss = F.mean_squared_error(target, q)
-		return loss, q
+		return sum_loss, q
 
 	def replay_experience(self):
 		if self.total_replay_memory == 0:
 			return
+		minibatch_size = self.total_replay_memory
 		if self.total_replay_memory < config.rl_replay_memory_size:
-			replay_index = np.random.randint(0, self.total_replay_memory, (config.rl_minibatch_size, 1))
+			minibatch_size = self.total_replay_memory
+			replay_index = np.random.randint(0, self.total_replay_memory, (minibatch_size, 1))
 		else:
-			replay_index = np.random.randint(0, config.rl_replay_memory_size, (config.rl_minibatch_size, 1))
+			replay_index = np.random.randint(0, config.rl_replay_memory_size, (minibatch_size, 1))
 
-		shape_state = (config.rl_minibatch_size, config.rl_chain_length)
-		shape_action = (config.rl_minibatch_size,)
-		shape_mask = (config.rl_replay_memory_size, config.q_k_heads)
+		shape_state = (minibatch_size, config.rl_chain_length)
+		shape_action = (minibatch_size,)
+		shape_mask = (minibatch_size, config.q_k_heads)
 
 		state = np.empty(shape_state, dtype=np.float32)
 		action = np.empty(shape_action, dtype=np.uint8)
 		reward = np.empty(shape_action, dtype=np.int8)
 		next_state = np.empty(shape_state, dtype=np.float32)
 		mask = np.empty(shape_mask, dtype=np.int8)
-		for i in xrange(config.rl_minibatch_size):
+		for i in xrange(len(replay_index)):
 			state[i] = self.replay_memory[0][replay_index[i]]
 			action[i] = self.replay_memory[1][replay_index[i]]
 			reward[i] = self.replay_memory[2][replay_index[i]]
@@ -486,7 +494,7 @@ class BootstrappedDoubleDQN(DQN):
 		loss, _ = self.forward_one_step(state, action, reward, next_state, mask, test=False)
 		loss.backward()
 		self.optimizer_update()
-		return loss
+		return loss.data
 
 	def optimizer_zero_grads(self):
 		self.optimizer_shared_fc.zero_grads()
@@ -494,8 +502,9 @@ class BootstrappedDoubleDQN(DQN):
 			optimizer.zero_grads()
 
 	def optimizer_update(self):
-		self.optimizer_fc_value.update()
-		self.optimizer_fc_advantage.update()
+		self.optimizer_shared_fc.update()
+		for i, optimizer in enumerate(self.optimizer_head_fc_array):
+			optimizer.update()
 
 	def compute_q_variable(self, state, k=0, test=False):
 		shared_output = self.shared_fc(state, test=test)
@@ -509,11 +518,12 @@ class BootstrappedDoubleDQN(DQN):
 		output = head(shared_output, test=test)
 		return output
 
-	def argmax_q_variable_of_all_head(self, q_array):
+	def argmax_q_variable_of_all_head(self, q_array, cpu=False):
+		xp = np if cpu else cuda.cupy
 		argmax_array = []
 		for i, q in enumerate(q_array):
-			argmax = np.argmax(q.data, axis=1)
-			argmax_array.push(argmax)
+			argmax = xp.argmax(q.data, axis=1)
+			argmax_array.append(argmax)
 		return argmax_array
 
 	def compute_q_variable_of_all_head(self, state, to_cpu=True, test=False):

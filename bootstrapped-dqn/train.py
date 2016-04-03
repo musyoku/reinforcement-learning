@@ -14,22 +14,30 @@ env = Environment()
 max_episode = 2000
 total_steps = 0
 
+dump_freq = 10
+sum_reward = 0
+sum_loss = 0.0
+
 if config.rl_model in ["bootstrapped_double_dqn"]:
 	for episode in xrange(max_episode):
 		env.init()
 		k = np.random.randint(0, len(config.actions))
-		print "episode:", episode, "k:", k
+		# print "episode:", episode, "k:", k
 		while True:
 			state = env.get_current_state()
 			action, q = model.explore(state, k)
 			next_state, reward, episode_ends = env.agent_step(action)
 			mask = np.random.binomial(1, config.q_p_mask_sampling, (config.q_k_heads,))
 			total_steps += 1
-			print action, q, mask
+			sum_reward += reward
 			model.store_transition_in_replay_memory(state, action, reward, next_state, mask)
 			if total_steps % config.rl_update_frequency == 0:
-				model.replay_experience()
+				sum_loss += model.replay_experience()
 			if episode_ends is True:
 				break
+		if episode % dump_freq == 0:
+			print "reward:", sum_reward / float(dump_freq), "loss:", sum_loss / float(dump_freq)
+			sum_reward = 0
+			sum_loss = 0
 else:
 	pass

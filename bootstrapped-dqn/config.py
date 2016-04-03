@@ -39,7 +39,7 @@ class Config:
 		## For DQN / Double DQN / DDQN + Dueling Network
 		self.q_fc_units = [self.rl_chain_length, 50, len(self.actions)]
 		## For Bootstrapped DQN
-		self.q_bootstrapped_shared_fc_units = [self.rl_chain_length, 50]
+		self.q_bootstrapped_shared_fc_units = [self.rl_chain_length, 50, 100]
 		self.q_bootstrapped_head_fc_units = [self.q_bootstrapped_shared_fc_units[-1], 50, len(self.actions)]
 
 		# Number of bootstrap heads
