@@ -5,6 +5,7 @@ from config import config
 import model
 from env import Environment
 
+config.use_gpu = False
 config.rl_model = "bootstrapped_dqn"
 
 model = model.load()
