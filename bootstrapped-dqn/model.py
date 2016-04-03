@@ -295,6 +295,22 @@ class DoubleDQN(DQN):
 		loss = F.mean_squared_error(target, q)
 		return loss, q
 
+		
+class GradientNormalizing(object):
+	name = 'GradientClipping'
+
+	def __init__(self, threshold):
+		self.threshold = threshold
+
+	def __call__(self, opt):
+		norm = numpy.sqrt(_sum_sqnorm([p.grad for p in opt.target.params()]))
+		rate = self.threshold / norm
+		if rate < 1:
+			for param in opt.target.params():
+				grad = param.grad
+				with cuda.get_device(grad):
+					grad *= rate
+
 class BootstrappedDQN(DQN):
 
 	def __init__(self):
