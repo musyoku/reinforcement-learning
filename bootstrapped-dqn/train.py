@@ -6,7 +6,7 @@ import model
 from env import Environment
 
 config.use_gpu = False
-config.rl_model = "bootstrapped_dqn"
+config.rl_model = "bootstrapped_double_dqn"
 
 model = model.load()
 env = Environment()
@@ -14,7 +14,7 @@ env = Environment()
 max_episode = 2000
 total_steps = 0
 
-if config.rl_model in ["bootstrapped_dqn"]:
+if config.rl_model in ["bootstrapped_double_dqn"]:
 	for episode in xrange(max_episode):
 		env.init()
 		k = np.random.randint(0, len(config.actions))

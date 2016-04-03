@@ -15,7 +15,7 @@ except:
 	pass
 
 def load():
-	available_models = ["dqn", "double_dqn", "dueling_double_dqn", "bootstrapped_dqn"]
+	available_models = ["dqn", "double_dqn", "dueling_double_dqn", "bootstrapped_double_dqn"]
 	if config.rl_model not in available_models:
 		raise Exception("specified model is not available.")
 	if config.rl_model == "dqn":
@@ -24,9 +24,22 @@ def load():
 		return DoubleDQN()
 	elif config.rl_model == "dueling_double_dqn":
 		return DuelingDoubleDQN()
-	elif config.rl_model == "bootstrapped_dqn":
-		return BootstrappedDQN()
+	elif config.rl_model == "bootstrapped_double_dqn":
+		return BootstrappedDoubleDQN()
 	raise Exception("specified model is not available.")
+
+class BatchNormalization(L.BatchNormalization):
+	def __init__(self, size, decay=0.9, eps=1e-5, dtype=np.float32):
+		super(L.BatchNormalization, self).__init__()
+		self.add_param('gamma', size, dtype=dtype)
+		self.gamma.data.fill(1)
+		self.add_param('beta', size, dtype=dtype)
+		self.beta.data.fill(0)
+		self.add_persistent('avg_mean', np.zeros(size, dtype=dtype))
+		self.add_persistent('avg_var', np.ones(size, dtype=dtype))
+		self.add_persistent('N', 0)
+		self.decay = decay
+		self.eps = eps
 
 class FullyConnectedNetwork(chainer.Chain):
 	def __init__(self, **layers):
@@ -133,7 +146,7 @@ class DQN(Model):
 
 		for i, (n_in, n_out) in enumerate(fc_units):
 			fc_attributes["layer_%i" % i] = L.Linear(n_in, n_out, wscale=wscale)
-			fc_attributes["batchnorm_%i" % i] = L.BatchNormalization(n_out)
+			fc_attributes["batchnorm_%i" % i] = BatchNormalization(n_out)
 
 		fc = FullyConnectedNetwork(**fc_attributes)
 		fc.n_hidden_layers = len(fc_units) - 1
@@ -311,7 +324,7 @@ class GradientNormalizing(object):
 				with cuda.get_device(grad):
 					grad *= rate
 
-class BootstrappedDQN(DQN):
+class BootstrappedDoubleDQN(DQN):
 
 	def __init__(self):
 		self.exploration_rate = config.rl_initial_exploration
@@ -378,7 +391,7 @@ class BootstrappedDQN(DQN):
 
 		for i, (n_in, n_out) in enumerate(fc_units):
 			fc_attributes["layer_%i" % i] = L.Linear(n_in, n_out, wscale=wscale)
-			fc_attributes["batchnorm_%i" % i] = L.BatchNormalization(n_out)
+			fc_attributes["batchnorm_%i" % i] = BatchNormalization(n_out)
 
 		fc = FullyConnectedNetwork(**fc_attributes)
 		fc.n_hidden_layers = len(fc_units) - 1
@@ -390,19 +403,19 @@ class BootstrappedDQN(DQN):
 			fc.to_gpu()
 		return fc
 
-	def explore(self, state, k=0):
+	def explore(self, state, k=0, test=True):
 		if state.ndim == 1:
 			state = state.reshape(1, -1)
-		action_batch, q_batch = self.explore_batch(state, k)
+		action_batch, q_batch = self.explore_batch(state, k, test=test)
 		return action_batch[0], q_batch[0]
 
-	def explore_batch(self, state_batch, k=0):
+	def explore_batch(self, state_batch, k=0, test=True):
 		if state_batch.ndim == 1:
 			state_batch = state_batch.reshape(1, -1)
 		state_batch = Variable(state_batch)
 		if config.use_gpu:
 			state_batch.to_gpu()
-		q_batch = self.compute_q_variable(state_batch, k, test=True)
+		q_batch = self.compute_q_variable(state_batch, k, test=test)
 		if config.use_gpu:
 			q_batch.to_cpu()
 		q_batch = q_batch.data
@@ -419,13 +432,13 @@ class BootstrappedDQN(DQN):
 		if config.use_gpu:
 			state.to_gpu()
 			next_state.to_gpu()
-		q = self.compute_q_variable_of_all_head(state, test=test)
-		q_ = self.compute_q_variable_of_all_head(next_state, test=test)
-		max_action_indices = xp.argmax(q_.data, axis=1)
-		if config.use_gpu:
-			max_action_indices = cuda.to_cpu(max_action_indices)
+		q_array = self.compute_q_variable_of_all_head(state, test=test)
+		next_q_array = self.compute_q_variable_of_all_head(next_state, test=test)
+		max_action_indices_array = self.compute_q_variable_of_all_head(next_q_array)
 
-		target_q = self.compute_target_q_variable_of_all_head(next_state, test=True)
+		target_q_array = self.compute_target_q_variable_of_all_head(next_state, test=test)
+
+		print mask
 
 		target = q.data.copy()
 
@@ -496,18 +509,31 @@ class BootstrappedDQN(DQN):
 		output = head(shared_output, test=test)
 		return output
 
-	def compute_q_variable_of_all_head(self, state, test=False):
+	def argmax_q_variable_of_all_head(self, q_array):
+		argmax_array = []
+		for i, q in enumerate(q_array):
+			argmax = np.argmax(q.data, axis=1)
+			argmax_array.push(argmax)
+		return argmax_array
+
+	def compute_q_variable_of_all_head(self, state, to_cpu=True, test=False):
 		shared_output = self.shared_fc(state, test=test)
 		q_array = []
 		for i, head in enumerate(self.head_fc_array):
-			q_array.append(head(shared_output))
+			output = head(shared_output)
+			if to_cpu:
+				output.to_cpu()
+			q_array.append(output)
 		return q_array
 
-	def compute_target_q_variable_of_all_head(self, state, test=True):
+	def compute_target_q_variable_of_all_head(self, state, to_cpu=True, test=True):
 		shared_output = self.target_shared_fc(state, test=test)
 		q_array = []
 		for i, head in enumerate(self.target_head_fc_array):
-			q_array.append(head(shared_output))
+			output = head(shared_output)
+			if to_cpu:
+				output.to_cpu()
+			q_array.append(output)
 		return q_array
 
 	def update_target(self):
