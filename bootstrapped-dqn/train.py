@@ -31,6 +31,7 @@ bootstrapped = False
 if config.rl_model in ["bootstrapped_double_dqn"]:
 	bootstrapped = True
 
+start_time = time.time()
 for episode in xrange(max_episode):
 	episode_rewards = 0
 	env.init()
@@ -45,6 +46,7 @@ for episode in xrange(max_episode):
 		else:
 			action, q = model.eps_greedy(state, exploration_rate=exploration_rate)
 			next_state, reward, episode_ends = env.agent_step(action)
+		# print state, action, next_state, q, episode_rewards
 		total_steps += 1
 		sum_reward += reward
 		episode_rewards += reward
@@ -68,10 +70,14 @@ for episode in xrange(max_episode):
 		sum_reward = 0
 		sum_loss = 0
 
-	if episode % save_freq == 0:
+	if episode % save_freq == 0 and episode != 0:
 		model.save()
 
 	if episode_rewards == 10:
 		num_optimal_episodes += 1
 
+	if num_optimal_episodes == 100:
+		break
+
 print "num_optimal_episodes:", num_optimal_episodes
+print "total_time:", time.time() - start_time

@@ -9,7 +9,9 @@ class Config:
 
 		# 11: rigtht
 		# 22: left
-		self.actions = [11, 22]
+		# 33: no-op
+		# 44: no-op
+		self.actions = [11, 22, 33, 44]
 
 
 		# "dqn"
@@ -18,14 +20,14 @@ class Config:
 		# "bootstrapped_dqn"
 		self.rl_model = "bootstrapped_dqn"
 
-		self.rl_chain_length = 3
+		self.rl_chain_length = 7
 
-		self.rl_minibatch_size = 64
+		self.rl_minibatch_size = 32
 		self.rl_replay_memory_size = 10 ** 6
 		self.rl_replay_start_size = 10 ** 5
 		self.rl_target_network_update_frequency = 10 ** 4
 		self.rl_discount_factor = 0.99
-		self.rl_update_frequency = 4
+		self.rl_update_frequency = 1
 		self.rl_learning_rate = 0.00025
 		self.rl_gradient_momentum = 0.95
 		self.rl_initial_exploration = 1.0
@@ -43,9 +45,9 @@ class Config:
 		self.q_bootstrapped_head_fc_units = [self.q_bootstrapped_shared_fc_units[-1], 50, len(self.actions)]
 
 		# Number of bootstrap heads
-		self.q_k_heads = 1
+		self.q_k_heads = 5
 		# We sample a bootstrap mask from Bernoulli(p) 
-		self.q_p_mask_sampling = 0.75
+		self.q_p_mask_sampling = 0.5
 
 		# Common
 		## See activations.py

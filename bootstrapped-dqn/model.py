@@ -126,7 +126,6 @@ class DQN(Model):
 		self.optimizer_fc.setup(self.fc)
 		self.optimizer_fc.add_hook(chainer.optimizer.GradientClipping(10.0))
 
-		self.load()
 		self.update_target()
 
 	def build_network(self):
@@ -356,8 +355,6 @@ class BootstrappedDoubleDQN(DQN):
 			self.target_head_fc_array.append(copy.deepcopy(network))
 			self.optimizer_head_fc_array.append(optimizer)
 
-		self.load()
-		
 	def store_transition_in_replay_memory(self, state, action, reward, next_state, mask):
 		index = self.total_replay_memory % config.rl_replay_memory_size
 		if self.replay_memory[0][index].shape != state.shape:
