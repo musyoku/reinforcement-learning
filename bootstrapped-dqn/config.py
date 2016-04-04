@@ -37,13 +37,13 @@ class Config:
 		## e.g 500(input vector)->250->100(output vector)
 		## self.q_fc_units = [500, 250, 100]
 		## For DQN / Double DQN / DDQN + Dueling Network
-		self.q_fc_units = [self.rl_chain_length, 50, len(self.actions)]
+		self.q_fc_units = [self.rl_chain_length, 50, 50, len(self.actions)]
 		## For Bootstrapped DQN
 		self.q_bootstrapped_shared_fc_units = [self.rl_chain_length, 50]
 		self.q_bootstrapped_head_fc_units = [self.q_bootstrapped_shared_fc_units[-1], 50, len(self.actions)]
 
 		# Number of bootstrap heads
-		self.q_k_heads = 10
+		self.q_k_heads = 1
 		# We sample a bootstrap mask from Bernoulli(p) 
 		self.q_p_mask_sampling = 0.75
 

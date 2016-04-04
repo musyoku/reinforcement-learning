@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-import os
+import os, time
 import numpy as np
 import chainer, math, copy, os
 from chainer import cuda, Variable, optimizers, serializers, function
@@ -463,9 +463,9 @@ class BootstrappedDoubleDQN(DQN):
 	def replay_experience(self):
 		if self.total_replay_memory == 0:
 			return
-		minibatch_size = self.total_replay_memory
+		minibatch_size = config.rl_minibatch_size
 		if self.total_replay_memory < config.rl_replay_memory_size:
-			minibatch_size = self.total_replay_memory
+			minibatch_size = self.total_replay_memory if self.total_replay_memory < config.rl_minibatch_size else config.rl_minibatch_size
 			replay_index = np.random.randint(0, self.total_replay_memory, (minibatch_size, 1))
 		else:
 			replay_index = np.random.randint(0, config.rl_replay_memory_size, (minibatch_size, 1))
