@@ -54,11 +54,14 @@ for episode in xrange(max_episode):
 			model.store_transition_in_replay_memory(state, action, reward, next_state, mask)
 		else:
 			model.store_transition_in_replay_memory(state, action, reward, next_state)
-		if total_steps % config.rl_update_frequency == 0:
-			sum_loss += model.replay_experience()
-			if bootstrapped is False:
-				model.decrease_exploration_rate()
-				exploration_rate = model.exploration_rate
+		loss = model.replay_experience()
+		if loss == -1.0:
+			pass # burn out
+		else:
+			sum_loss += loss
+		if bootstrapped is False:
+			model.decrease_exploration_rate()
+			exploration_rate = model.exploration_rate
 		if episode_ends is True:
 			break
 	if episode % dump_freq == 0:

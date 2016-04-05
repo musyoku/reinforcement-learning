@@ -45,7 +45,7 @@ class Config:
 		self.q_bootstrapped_head_fc_units = [self.q_bootstrapped_shared_fc_units[-1], 50, len(self.actions)]
 
 		# Number of bootstrap heads
-		self.q_k_heads = 5
+		self.q_k_heads = 10
 		# We sample a bootstrap mask from Bernoulli(p) 
 		self.q_p_mask_sampling = 0.5
 

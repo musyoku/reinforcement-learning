@@ -459,10 +459,11 @@ class BootstrappedDoubleDQN(DQN):
 
 	def replay_experience(self):
 		if self.total_replay_memory == 0:
-			return
+			return -1.0
+		if self.total_replay_memory < config.rl_minibatch_size:
+			return -1.0
 		minibatch_size = config.rl_minibatch_size
 		if self.total_replay_memory < config.rl_replay_memory_size:
-			minibatch_size = self.total_replay_memory if self.total_replay_memory < config.rl_minibatch_size else config.rl_minibatch_size
 			replay_index = np.random.randint(0, self.total_replay_memory, (minibatch_size, 1))
 		else:
 			replay_index = np.random.randint(0, config.rl_replay_memory_size, (minibatch_size, 1))
