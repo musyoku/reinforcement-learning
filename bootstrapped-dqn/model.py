@@ -28,14 +28,15 @@ def load():
 		return BootstrappedDoubleDQN()
 	raise Exception("specified model is not available.")
 
-	import numpy
-
 def _as_mat(x):
 	if x.ndim == 2:
 		return x
 	return x.reshape(len(x), -1)
 
-class LinearFunction(function.Function):
+class LinearHeadFunction(function.Function):
+
+	def __init__(self, W_mask):
+		self.W_mask = W_mask
 
 	def check_type_forward(self, in_types):
 		n_in = in_types.size()
@@ -43,8 +44,8 @@ class LinearFunction(function.Function):
 		x_type, w_type = in_types[:2]
 
 		type_check.expect(
-			x_type.dtype == numpy.float32,
-			w_type.dtype == numpy.float32,
+			x_type.dtype == np.float32,
+			w_type.dtype == np.float32,
 			x_type.ndim >= 2,
 			w_type.ndim == 2,
 			type_check.prod(x_type.shape[1:]) == w_type.shape[1],
@@ -52,14 +53,14 @@ class LinearFunction(function.Function):
 		if n_in.eval() == 3:
 			b_type = in_types[2]
 			type_check.expect(
-				b_type.dtype == numpy.float32,
+				b_type.dtype == np.float32,
 				b_type.ndim == 1,
 				b_type.shape[0] == w_type.shape[0],
 			)
 
 	def forward(self, inputs):
 		x = _as_mat(inputs[0])
-		W = inputs[1]
+		W = inputs[1] * self.W_mask
 		y = x.dot(W.T)
 		if len(inputs) == 3:
 			b = inputs[2]
@@ -68,7 +69,7 @@ class LinearFunction(function.Function):
 
 	def backward(self, inputs, grad_outputs):
 		x = _as_mat(inputs[0])
-		W = inputs[1]
+		W = inputs[1] * self.W_mask
 		gy = grad_outputs[0]
 
 		gx = gy.dot(W).reshape(inputs[0].shape)
@@ -79,21 +80,28 @@ class LinearFunction(function.Function):
 		else:
 			return gx, gW
 
-def linear(x, W, b=None):
 
+def linear_head(x, W, W_mask, b=None):
 	if b is None:
-		return LinearFunction()(x, W)
+		return LinearHeadFunction(W_mask)(x, W)
 	else:
-		return LinearFunction()(x, W, b)
+		return LinearHeadFunction(W_mask)(x, W, b)
 
-class Linear(link.Link):
+class LinearHead(link.Link):
 
-	def __init__(self, in_size, out_size, wscale=1, bias=0, nobias=False, initialW=None, initial_bias=None):
-		super(Linear, self).__init__(W=(out_size, in_size))
+	def __init__(self, head_in_size, head_out_size, num_heads, wscale=1, bias=0, nobias=False, initialW=None, initial_bias=None):
+		in_size = head_in_size * num_heads
+		out_size = head_out_size * num_heads
+		super(LinearHead, self).__init__(W=(out_size, in_size))
 		if initialW is None:
-			initialW = numpy.random.normal(0, wscale * numpy.sqrt(1. / in_size), (out_size, in_size))
+			initialW = np.random.normal(0, wscale * np.sqrt(1. / in_size), (out_size, in_size))
 		self.W.data[...] = initialW
 
+		W_mask = np.zeros((out_size, in_size), dtype=np.float32)
+		for i in xrange(num_heads):
+			W_mask[i * head_out_size:(i + 1) * head_out_size, i * head_in_size:(i + 1) * head_in_size] = 1.0
+
+		self.add_persistent("W_mask", W_mask)
 		if nobias:
 			self.b = None
 		else:
@@ -103,7 +111,7 @@ class Linear(link.Link):
 			self.b.data[...] = initial_bias
 	
 	def __call__(self, x):
-		return linear(x, self.W, self.b)
+		return linear_head(x, self.W, self.W_mask, self.b)
 
 
 class BatchNormalization(L.BatchNormalization):
@@ -368,7 +376,10 @@ class DoubleDQN(DQN):
 
 		for i in xrange(n_batch):
 			max_action_index = max_action_indices[i]
-			target_value = reward[i] + config.rl_discount_factor * target_q.data[i][max_action_indices[i]]
+			if episode_ends[i] is True:
+				target_value = reward[i]
+			else:
+				target_value = reward[i] + config.rl_discount_factor * target_q.data[i][max_action_indices[i]]
 			action_index = self.get_index_for_action(action[i])
 			old_value = target[i, action_index]
 			diff = target_value - old_value
@@ -411,6 +422,7 @@ class BootstrappedDoubleDQN(DQN):
 			np.zeros(shape_action, dtype=np.float32),
 			np.zeros(shape_state, dtype=np.float32),
 			np.zeros(shape_mask, dtype=np.uint8),
+			np.zeros(shape_action, dtype=np.bool)
 		]
 		self.total_replay_memory = 0
 
@@ -434,7 +446,7 @@ class BootstrappedDoubleDQN(DQN):
 			self.target_head_fc_array.append(copy.deepcopy(network))
 			self.optimizer_head_fc_array.append(optimizer)
 
-	def store_transition_in_replay_memory(self, state, action, reward, next_state, mask):
+	def store_transition_in_replay_memory(self, state, action, reward, next_state, mask, episode_ends):
 		index = self.total_replay_memory % config.rl_replay_memory_size
 		if self.replay_memory[0][index].shape != state.shape:
 			raise Exception()
@@ -447,6 +459,7 @@ class BootstrappedDoubleDQN(DQN):
 		self.replay_memory[2][index] = reward
 		self.replay_memory[3][index] = next_state
 		self.replay_memory[4][index] = mask
+		self.replay_memory[5][index] = episode_ends
 		self.total_replay_memory += 1
 
 	def build_network(self, units=None):
@@ -494,7 +507,7 @@ class BootstrappedDoubleDQN(DQN):
 			action_batch[i] = self.get_action_for_index(action_batch[i])
 		return action_batch, q_batch
 	
-	def forward_one_step(self, state, action, reward, next_state, mask, test=False):
+	def forward_one_step(self, state, action, reward, next_state, mask, episode_ends, test=False):
 		xp = cuda.cupy if config.use_gpu else np
 		n_batch = state.shape[0]
 		state = Variable(state)
@@ -522,7 +535,10 @@ class BootstrappedDoubleDQN(DQN):
 				if mask[i,k] == 0:
 					continue
 				max_action_index = max_action_indices[i]
-				target_value = reward[i] + config.rl_discount_factor * target_q.data[i][max_action_indices[i]]
+				if episode_ends[i] is True:
+					target_value = reward[i]
+				else:
+					target_value = reward[i] + config.rl_discount_factor * target_q.data[i][max_action_indices[i]]
 				action_index = self.get_index_for_action(action[i])
 				old_value = target[i, action_index]
 				diff = target_value - old_value
@@ -556,15 +572,17 @@ class BootstrappedDoubleDQN(DQN):
 		reward = np.empty(shape_action, dtype=np.int8)
 		next_state = np.empty(shape_state, dtype=np.float32)
 		mask = np.empty(shape_mask, dtype=np.int8)
+		episode_ends = np.empty(shape_action, dtype=np.int8)
 		for i in xrange(len(replay_index)):
 			state[i] = self.replay_memory[0][replay_index[i]]
 			action[i] = self.replay_memory[1][replay_index[i]]
 			reward[i] = self.replay_memory[2][replay_index[i]]
 			next_state[i] = self.replay_memory[3][replay_index[i]]
 			mask[i] = self.replay_memory[4][replay_index[i]]
+			episode_ends[i] = self.replay_memory[5][replay_index[i]]
 
 		self.optimizer_zero_grads()
-		loss, _ = self.forward_one_step(state, action, reward, next_state, mask, test=False)
+		loss, _ = self.forward_one_step(state, action, reward, next_state, mask, episode_ends, test=False)
 		loss.backward()
 		self.optimizer_update()
 		return loss.data

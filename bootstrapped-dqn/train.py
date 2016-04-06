@@ -51,9 +51,9 @@ for episode in xrange(max_episode):
 		sum_reward += reward
 		episode_rewards += reward
 		if bootstrapped:
-			model.store_transition_in_replay_memory(state, action, reward, next_state, mask)
+			model.store_transition_in_replay_memory(state, action, reward, next_state, mask, episode_ends)
 		else:
-			model.store_transition_in_replay_memory(state, action, reward, next_state)
+			model.store_transition_in_replay_memory(state, action, reward, next_state, episode_ends)
 		loss = model.replay_experience()
 		if loss == -1.0:
 			pass # burn out
