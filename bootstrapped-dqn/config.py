@@ -20,7 +20,7 @@ class Config:
 		# "bootstrapped_dqn"
 		self.rl_model = "bootstrapped_dqn"
 
-		self.rl_chain_length = 7
+		self.rl_chain_length = 10
 
 		self.rl_minibatch_size = 32
 		self.rl_replay_memory_size = 10 ** 6

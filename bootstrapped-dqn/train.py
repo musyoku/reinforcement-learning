@@ -11,7 +11,7 @@ config.use_gpu = False
 
 config.rl_model = "double_dqn"
 config.rl_model = "bootstrapped_double_dqn"
-config.rl_final_exploration_step = 1000
+config.rl_final_exploration_step = 10000
 
 model = model.load()
 env = Environment()
@@ -60,11 +60,10 @@ for episode in xrange(max_episode):
 		else:
 			sum_loss += loss
 		if bootstrapped is False:
-			model.decrease_exploration_rate()
-			exploration_rate = model.exploration_rate
+			exploration_rate = model.decrease_exploration_rate()
 		if episode_ends is True:
 			break
-	if episode % dump_freq == 0:
+	if episode % dump_freq == 0 and episode != 0:
 		if bootstrapped:
 			print "episode:", episode, "reward:", sum_reward / float(dump_freq * env.max_episodes), "loss:", sum_loss / float(dump_freq), "optimal:", num_optimal_episodes
 		else:

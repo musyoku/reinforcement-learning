@@ -2,7 +2,7 @@
 import os, time
 import numpy as np
 import chainer, math, copy, os
-from chainer import cuda, Variable, optimizers, serializers, function
+from chainer import cuda, Variable, optimizers, serializers, function, link
 from chainer.utils import type_check
 from chainer import functions as F
 from chainer import links as L
@@ -27,6 +27,84 @@ def load():
 	elif config.rl_model == "bootstrapped_double_dqn":
 		return BootstrappedDoubleDQN()
 	raise Exception("specified model is not available.")
+
+	import numpy
+
+def _as_mat(x):
+	if x.ndim == 2:
+		return x
+	return x.reshape(len(x), -1)
+
+class LinearFunction(function.Function):
+
+	def check_type_forward(self, in_types):
+		n_in = in_types.size()
+		type_check.expect(2 <= n_in, n_in <= 3)
+		x_type, w_type = in_types[:2]
+
+		type_check.expect(
+			x_type.dtype == numpy.float32,
+			w_type.dtype == numpy.float32,
+			x_type.ndim >= 2,
+			w_type.ndim == 2,
+			type_check.prod(x_type.shape[1:]) == w_type.shape[1],
+		)
+		if n_in.eval() == 3:
+			b_type = in_types[2]
+			type_check.expect(
+				b_type.dtype == numpy.float32,
+				b_type.ndim == 1,
+				b_type.shape[0] == w_type.shape[0],
+			)
+
+	def forward(self, inputs):
+		x = _as_mat(inputs[0])
+		W = inputs[1]
+		y = x.dot(W.T)
+		if len(inputs) == 3:
+			b = inputs[2]
+			y += b
+		return y,
+
+	def backward(self, inputs, grad_outputs):
+		x = _as_mat(inputs[0])
+		W = inputs[1]
+		gy = grad_outputs[0]
+
+		gx = gy.dot(W).reshape(inputs[0].shape)
+		gW = gy.T.dot(x)
+		if len(inputs) == 3:
+			gb = gy.sum(0)
+			return gx, gW, gb
+		else:
+			return gx, gW
+
+def linear(x, W, b=None):
+
+	if b is None:
+		return LinearFunction()(x, W)
+	else:
+		return LinearFunction()(x, W, b)
+
+class Linear(link.Link):
+
+	def __init__(self, in_size, out_size, wscale=1, bias=0, nobias=False, initialW=None, initial_bias=None):
+		super(Linear, self).__init__(W=(out_size, in_size))
+		if initialW is None:
+			initialW = numpy.random.normal(0, wscale * numpy.sqrt(1. / in_size), (out_size, in_size))
+		self.W.data[...] = initialW
+
+		if nobias:
+			self.b = None
+		else:
+			self.add_param('b', out_size)
+			if initial_bias is None:
+				initial_bias = bias
+			self.b.data[...] = initial_bias
+	
+	def __call__(self, x):
+		return linear(x, self.W, self.b)
+
 
 class BatchNormalization(L.BatchNormalization):
 	def __init__(self, size, decay=0.9, eps=1e-5, dtype=np.float32):
@@ -115,6 +193,7 @@ class Model:
 
 	def decrease_exploration_rate(self):
 		self.exploration_rate = max(self.exploration_rate - 1.0 / config.rl_final_exploration_step, config.rl_final_exploration)
+		return self.exploration_rate
 
 class DQN(Model):
 	def __init__(self):
