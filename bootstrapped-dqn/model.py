@@ -133,6 +133,7 @@ class FullyConnectedNetwork(chainer.Chain):
 		self.n_hidden_layers = 0
 		self.activation_function = "elu"
 		self.apply_batchnorm_to_input = False
+		self.apply_batchnorm_to_output = False
 		self.apply_batchnorm = False
 
 	def forward_one_step(self, x, test):
@@ -154,7 +155,7 @@ class FullyConnectedNetwork(chainer.Chain):
 
 		# Output
 		u = getattr(self, "layer_%i" % self.n_hidden_layers)(chain[-1])
-		if self.apply_batchnorm:
+		if self.apply_batchnorm_to_output:
 			u = getattr(self, "batchnorm_%i" % self.n_hidden_layers)(u, test=test)
 		chain.append(f(u))
 
@@ -175,11 +176,12 @@ class Model:
 			np.zeros(shape_state, dtype=np.float32),
 			np.zeros(shape_action, dtype=np.uint8),
 			np.zeros(shape_action, dtype=np.float32),
-			np.zeros(shape_state, dtype=np.float32)
+			np.zeros(shape_state, dtype=np.float32),
+			np.zeros(shape_action, dtype=np.bool)
 		]
 		self.total_replay_memory = 0
 		
-	def store_transition_in_replay_memory(self, state, action, reward, next_state):
+	def store_transition_in_replay_memory(self, state, action, reward, next_state, episode_ends):
 		index = self.total_replay_memory % config.rl_replay_memory_size
 		if self.replay_memory[0][index].shape != state.shape:
 			raise Exception()
@@ -189,6 +191,7 @@ class Model:
 		self.replay_memory[1][index] = action
 		self.replay_memory[2][index] = reward
 		self.replay_memory[3][index] = next_state
+		self.replay_memory[4][index] = episode_ends
 		self.total_replay_memory += 1
 
 	def get_replay_memory_size(self):
@@ -307,16 +310,18 @@ class DQN(Model):
 
 		state = np.empty(shape_state, dtype=np.float32)
 		action = np.empty(shape_action, dtype=np.uint8)
-		reward = np.empty(shape_action, dtype=np.int8)
+		reward = np.empty(shape_action, dtype=np.float32)
 		next_state = np.empty(shape_state, dtype=np.float32)
+		episode_ends = np.empty(shape_action, dtype=np.bool)
 		for i in xrange(config.rl_minibatch_size):
 			state[i] = self.replay_memory[0][replay_index[i]]
 			action[i] = self.replay_memory[1][replay_index[i]]
 			reward[i] = self.replay_memory[2][replay_index[i]]
 			next_state[i] = self.replay_memory[3][replay_index[i]]
+			episode_ends[i] = self.replay_memory[4][replay_index[i]]
 
 		self.optimizer_zero_grads()
-		loss, _ = self.forward_one_step(state, action, reward, next_state, test=False)
+		loss, _ = self.forward_one_step(state, action, reward, next_state, episode_ends, test=False)
 		loss.backward()
 		self.optimizer_update()
 		return loss.data
@@ -357,7 +362,7 @@ class DQN(Model):
 
 class DoubleDQN(DQN):
 	
-	def forward_one_step(self, state, action, reward, next_state, test=False):
+	def forward_one_step(self, state, action, reward, next_state, episode_ends, test=False):
 		xp = cuda.cupy if config.use_gpu else np
 		n_batch = state.shape[0]
 		state = Variable(state)
@@ -524,6 +529,7 @@ class BootstrappedDoubleDQN(DQN):
 		return action_batch, q_batch
 	
 	def forward_one_step(self, state, action, reward, next_state, mask, episode_ends, test=False):
+		start_time = time.time()
 		xp = cuda.cupy if config.use_gpu else np
 		n_batch = state.shape[0]
 		state = Variable(state)
@@ -537,26 +543,30 @@ class BootstrappedDoubleDQN(DQN):
 
 		target_q_combined = self.compute_target_q_variable_of_all_head(next_state, test=test)
 		target_combined = q_combined.data.copy()
+		if config.use_gpu:
+			target_combined = cuda.to_cpu(target_combined)
+			target_q_combined.to_cpu()
 
 		length = config.q_bootstrapped_head_fc_units[-1]
-		for k in xrange(config.q_k_heads):
-			for i in xrange(n_batch):
-				if mask[i,k] == 0:
-					continue
-				if episode_ends[i] is True:
-					target_value = reward[i]
-				else:
-					pos = k*length+max_action_indices_array[i,k]
-					target_value = reward[i] + config.rl_discount_factor * target_q_combined.data[i, pos]
-				action_index = self.get_index_for_action(action[i])
-				old_value = target_combined[i, k*length+action_index]
-				diff = target_value - old_value
-				if diff > 1.0:
-					target_value = 1.0 + old_value	
-				elif diff < -1.0:
-					target_value = -1.0 + old_value	
-				target_combined[i, k*length+action_index] = target_value
+
+		ks = np.arange(config.q_k_heads, dtype=np.uint8)
+		for i in xrange(n_batch):
+			if episode_ends[i] is True:
+				target_values = np.full((config.q_k_heads,), reward[i], dtype=np.float32)
+			else:
+				pos = ks*length+max_action_indices_array[i,ks]
+				target_values = reward[i] + config.rl_discount_factor * target_q_combined.data[i, pos]
+			action_index = self.get_index_for_action(action[i])
+			old_values = target_combined[i, ks*length+action_index]
+			diff = target_values - old_values
+			diff = np.clip(diff, -1.0, 1.0)
+			target_values = diff + old_values
+			target_values *= mask[i]
+			target_combined[i, ks*length+action_index] = target_values
+
 		target_combined = Variable(target_combined)
+		if config.use_gpu:
+			target_combined.to_gpu()
 		loss = F.mean_squared_error(target_combined, q_combined)
 		return loss, q_combined
 
@@ -577,10 +587,10 @@ class BootstrappedDoubleDQN(DQN):
 
 		state = np.empty(shape_state, dtype=np.float32)
 		action = np.empty(shape_action, dtype=np.uint8)
-		reward = np.empty(shape_action, dtype=np.int8)
+		reward = np.empty(shape_action, dtype=np.float32)
 		next_state = np.empty(shape_state, dtype=np.float32)
-		mask = np.empty(shape_mask, dtype=np.int8)
-		episode_ends = np.empty(shape_action, dtype=np.int8)
+		mask = np.empty(shape_mask, dtype=np.float32)
+		episode_ends = np.empty(shape_action, dtype=np.float32)
 		for i in xrange(len(replay_index)):
 			state[i] = self.replay_memory[0][replay_index[i]]
 			action[i] = self.replay_memory[1][replay_index[i]]
@@ -632,7 +642,7 @@ class BootstrappedDoubleDQN(DQN):
 		for i in xrange(config.q_k_heads):
 			argmax = xp.argmax(q.data[:,i*length:(i+1)*length], axis=1)
 			result[:,i] = argmax
-		if xp is cuda.cupy:
+		if cpu:
 			result = cuda.to_cpu(result)
 		return result
 

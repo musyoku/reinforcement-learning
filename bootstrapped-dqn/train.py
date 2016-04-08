@@ -6,13 +6,13 @@ import model
 from env import Environment
 
 #############################################
-config.use_gpu = False
+config.use_gpu = True
 #############################################
 
-config.rl_chain_length = 10
 config.rl_model = "double_dqn"
 config.rl_model = "bootstrapped_double_dqn"
 config.rl_final_exploration_step = 10000
+config.apply_batchnorm = False
 
 model = model.load()
 env = Environment()
@@ -33,6 +33,7 @@ if config.rl_model in ["bootstrapped_double_dqn"]:
 	bootstrapped = True
 
 start_time = time.time()
+print config.rl_model
 for episode in xrange(max_episode):
 	episode_rewards = 0
 	env.init()
