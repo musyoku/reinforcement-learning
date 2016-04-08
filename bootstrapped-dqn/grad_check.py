@@ -19,14 +19,18 @@ def forward_check():
 	n_x = 100
 	state = xp.ones((2, n_x)).astype(xp.float32)
 	state = Variable(state)
+	initial_weight = np.ones((config.q_k_heads * in_head, n_x))
+	shared = L.Linear(n_x, config.q_k_heads * in_head, initialW=initial_weight)
 	initial_weight = np.ones((out_head * config.q_k_heads, in_head * config.q_k_heads))
-	shared = L.Linear(n_x, config.q_k_heads * in_head, wscale=wscale)
-	link = model.LinearHead(in_head, out_head, config.q_k_heads, initialW=initial_weight)
+	link1 = model.LinearHead(in_head, out_head, config.q_k_heads, initialW=initial_weight)
+	initial_weight = np.ones((in_head * config.q_k_heads, out_head * config.q_k_heads))
+	link2 = model.LinearHead(out_head, in_head, config.q_k_heads, initialW=initial_weight)
 	if config.use_gpu:
-		link.to_gpu()
+		link1.to_gpu()
+		link2.to_gpu()
 		shared.to_gpu()
-	output = link(shared(state))
-	print output
+	output = link2(link1(shared(state)))
+	print output.data
 
 
 def grad_check():

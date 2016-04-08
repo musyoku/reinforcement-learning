@@ -6,7 +6,7 @@ import model
 from env import Environment
 
 #############################################
-config.use_gpu = False
+config.use_gpu = True
 #############################################
 
 config.rl_model = "double_dqn"

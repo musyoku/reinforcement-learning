@@ -133,6 +133,7 @@ class FullyConnectedNetwork(chainer.Chain):
 		self.n_hidden_layers = 0
 		self.activation_function = "elu"
 		self.apply_batchnorm_to_input = False
+		self.apply_batchnorm = False
 
 	def forward_one_step(self, x, test):
 		f = activations[self.activation_function]
@@ -426,24 +427,18 @@ class BootstrappedDoubleDQN(DQN):
 		]
 		self.total_replay_memory = 0
 
-		self.shared_fc = self.build_network(units=config.q_bootstrapped_shared_fc_units)
+		self.shared_fc = self.build_network(config.q_bootstrapped_shared_fc_units)
 		self.target_shared_fc = copy.deepcopy(self.shared_fc)
 		self.optimizer_shared_fc = optimizers.Adam(alpha=config.rl_learning_rate, beta1=config.rl_gradient_momentum)
 		self.optimizer_shared_fc.setup(self.shared_fc)
 		self.optimizer_shared_fc.add_hook(chainer.optimizer.GradientClipping(10.0))
 		self.optimizer_shared_fc.add_hook(GradientNormalizing(1.0 / config.q_k_heads))
 
-		self.head_fc_array = []
-		self.target_head_fc_array = []
-		self.optimizer_head_fc_array = []
-		for n in xrange(config.q_k_heads):
-			network = self.build_network(units=config.q_bootstrapped_head_fc_units)
-			optimizer = optimizers.Adam(alpha=config.rl_learning_rate, beta1=config.rl_gradient_momentum)
-			optimizer.setup(network)
-			optimizer.add_hook(chainer.optimizer.GradientClipping(10.0))
-			self.head_fc_array.append(network)
-			self.target_head_fc_array.append(copy.deepcopy(network))
-			self.optimizer_head_fc_array.append(optimizer)
+		self.head_fc = self.build_head(config.q_k_heads, config.q_bootstrapped_head_fc_units)
+		self.target_head_fc = copy.deepcopy(self.head_fc)
+		self.optimizer_head_fc = optimizers.Adam(alpha=config.rl_learning_rate, beta1=config.rl_gradient_momentum)
+		self.optimizer_head_fc.setup(self.head_fc)
+		self.optimizer_head_fc.add_hook(chainer.optimizer.GradientClipping(10.0))
 
 	def store_transition_in_replay_memory(self, state, action, reward, next_state, mask, episode_ends):
 		index = self.total_replay_memory % config.rl_replay_memory_size
@@ -469,6 +464,7 @@ class BootstrappedDoubleDQN(DQN):
 
 		# Fully connected part of Q-Network
 		fc_attributes = {}
+		units[-1] *= config.q_k_heads
 		fc_units = zip(units[:-1], units[1:])
 
 		for i, (n_in, n_out) in enumerate(fc_units):
@@ -485,7 +481,7 @@ class BootstrappedDoubleDQN(DQN):
 			fc.to_gpu()
 		return fc
 
-	def build_head(self, units=None):
+	def build_head(self, k=0, units=None):
 		if units is None:
 			raise Exception()
 		config.check()
@@ -496,15 +492,13 @@ class BootstrappedDoubleDQN(DQN):
 		fc_units = zip(units[:-1], units[1:])
 
 		for i, (n_in, n_out) in enumerate(fc_units):
-			fc_attributes["layer_%i" % i] = L.Linear(n_in, n_out, wscale=wscale)
+			fc_attributes["layer_%i" % i] = LinearHead(n_in, n_out, config.q_k_heads, wscale=wscale)
 			fc_attributes["batchnorm_%i" % i] = BatchNormalization(n_out)
 
 		fc = FullyConnectedNetwork(**fc_attributes)
 		fc.n_hidden_layers = len(fc_units) - 1
 		fc.activation_function = config.q_fc_activation_function
-		fc.apply_batchnorm = config.apply_batchnorm
 		fc.apply_dropout = config.q_fc_apply_dropout
-		fc.apply_batchnorm_to_input = config.q_fc_apply_batchnorm_to_input
 		if config.use_gpu:
 			fc.to_gpu()
 		return fc
@@ -521,10 +515,9 @@ class BootstrappedDoubleDQN(DQN):
 		state_batch = Variable(state_batch)
 		if config.use_gpu:
 			state_batch.to_gpu()
-		q_batch = self.compute_q_variable(state_batch, k, test=test)
+		q_batch = self.compute_q(state_batch, k, test=test)
 		if config.use_gpu:
-			q_batch.to_cpu()
-		q_batch = q_batch.data
+			q_batch = cuda.to_cpu(q_batch)
 		action_batch = np.argmax(q_batch, axis=1)
 		for i in xrange(action_batch.shape[0]):
 			action_batch[i] = self.get_action_for_index(action_batch[i])
@@ -538,42 +531,34 @@ class BootstrappedDoubleDQN(DQN):
 		if config.use_gpu:
 			state.to_gpu()
 			next_state.to_gpu()
-		q_array = self.compute_q_variable_of_all_head(state, to_cpu=False, test=test)
-		next_q_array = self.compute_q_variable_of_all_head(next_state, to_cpu=False, test=test)
-		max_action_indices_array = self.argmax_q_variable_of_all_head(next_q_array, cpu=True)
+		q_combined = self.compute_q_variable_of_all_head(state, to_cpu=False, test=test)
+		next_q_combined = self.compute_q_variable_of_all_head(next_state, to_cpu=False, test=test)
+		max_action_indices_array = self.argmax_q_variable_of_all_head(next_q_combined, cpu=True)
 
-		target_q_array = self.compute_target_q_variable_of_all_head(next_state, test=test)
+		target_q_combined = self.compute_target_q_variable_of_all_head(next_state, test=test)
+		target_combined = q_combined.data.copy()
 
-		target_array = []
-		for i, q in enumerate(q_array):
-			target_array.append(q.data.copy())
-
-		sum_loss = 0
+		length = config.q_bootstrapped_head_fc_units[-1]
 		for k in xrange(config.q_k_heads):
-			max_action_indices = max_action_indices_array[k]
-			q = q_array[k]
-			target_q = target_q_array[k]
-			target = target_array[k]
 			for i in xrange(n_batch):
 				if mask[i,k] == 0:
 					continue
-				max_action_index = max_action_indices[i]
 				if episode_ends[i] is True:
 					target_value = reward[i]
 				else:
-					target_value = reward[i] + config.rl_discount_factor * target_q.data[i][max_action_indices[i]]
+					pos = k*length+max_action_indices_array[i,k]
+					target_value = reward[i] + config.rl_discount_factor * target_q_combined.data[i, pos]
 				action_index = self.get_index_for_action(action[i])
-				old_value = target[i, action_index]
+				old_value = target_combined[i, k*length+action_index]
 				diff = target_value - old_value
 				if diff > 1.0:
 					target_value = 1.0 + old_value	
 				elif diff < -1.0:
 					target_value = -1.0 + old_value	
-				target[i, action_index] = target_value
-			target = Variable(target)
-			sum_loss += F.mean_squared_error(target, q)
-
-		return sum_loss, q
+				target_combined[i, k*length+action_index] = target_value
+		target_combined = Variable(target_combined)
+		loss = F.mean_squared_error(target_combined, q_combined)
+		return loss, q_combined
 
 	def replay_experience(self):
 		if self.total_replay_memory == 0:
@@ -612,58 +597,56 @@ class BootstrappedDoubleDQN(DQN):
 
 	def optimizer_zero_grads(self):
 		self.optimizer_shared_fc.zero_grads()
-		for i, optimizer in enumerate(self.optimizer_head_fc_array):
-			optimizer.zero_grads()
+		self.optimizer_head_fc.zero_grads()
 
 	def optimizer_update(self):
 		self.optimizer_shared_fc.update()
-		for i, optimizer in enumerate(self.optimizer_head_fc_array):
-			optimizer.update()
+		self.optimizer_head_fc.update()
 
-	def compute_q_variable(self, state, k=0, test=False):
+	def compute_q(self, state, k=0, test=False):
+		if state.data.ndim != 2:
+			raise Exception()
 		shared_output = self.shared_fc(state, test=test)
-		head = self.head_fc_array[k]
-		output = head(shared_output, test=test)
+		output = self.head_fc(shared_output, test=test)
+		length = config.q_bootstrapped_head_fc_units[-1]
+		output = output.data[:,k*length:(k+1)*length]
+		if output.shape[1] != length:
+			raise Exception()
 		return output
 
-	def compute_target_q_variable(self, state, k=0, test=True):
+	def compute_target_q(self, state, k=0, test=True):
+		if state.data.ndim != 2:
+			raise Exception()
 		shared_output = self.target_shared_fc(state, test=test)
-		head = self.target_head_fc_array[k]
-		output = head(shared_output, test=test)
+		output = self.target_head_fc(shared_output, test=test)
+		length = config.q_bootstrapped_head_fc_units[-1]
+		output = output.data[:,k*length:(k+1)*length]
+		if output.shape[1] != length:
+			raise Exception()
 		return output
 
-	def argmax_q_variable_of_all_head(self, q_array, cpu=False):
-		xp = np if cpu else cuda.cupy
-		argmax_array = []
-		for i, q in enumerate(q_array):
-			argmax = xp.argmax(q.data, axis=1)
-			argmax_array.append(argmax)
-		return argmax_array
+	def argmax_q_variable_of_all_head(self, q, cpu=False):
+		xp = cuda.get_array_module(q.data)
+		length = config.q_bootstrapped_head_fc_units[-1]
+		result = xp.empty((q.data.shape[0], config.q_k_heads), dtype=xp.uint8)
+		for i in xrange(config.q_k_heads):
+			argmax = xp.argmax(q.data[:,i*length:(i+1)*length], axis=1)
+			result[:,i] = argmax
+		if xp is cuda.cupy:
+			result = cuda.to_cpu(result)
+		return result
 
 	def compute_q_variable_of_all_head(self, state, to_cpu=True, test=False):
 		shared_output = self.shared_fc(state, test=test)
-		q_array = []
-		for i, head in enumerate(self.head_fc_array):
-			output = head(shared_output)
-			if to_cpu:
-				output.to_cpu()
-			q_array.append(output)
-		return q_array
+		return self.head_fc(shared_output)
 
 	def compute_target_q_variable_of_all_head(self, state, to_cpu=True, test=True):
 		shared_output = self.target_shared_fc(state, test=test)
-		q_array = []
-		for i, head in enumerate(self.target_head_fc_array):
-			output = head(shared_output)
-			if to_cpu:
-				output.to_cpu()
-			q_array.append(output)
-		return q_array
+		return self.target_head_fc(shared_output)
 
 	def update_target(self):
 		self.target_shared_fc = copy.deepcopy(self.shared_fc)
-		for i, network in enumerate(self.head_fc_array):
-			self.head_fc_array[i] = copy.deepcopy(self.head_fc_array[i])
+		self.target_head_fc = copy.deepcopy(self.head_fc)
 
 	def load(self):
 		dir = "model"
@@ -672,32 +655,25 @@ class BootstrappedDoubleDQN(DQN):
 			serializers.load_hdf5(filename, self.shared_fc)
 			print "model shared_fc loaded successfully."
 
-		for i, network in enumerate(self.head_fc_array):
-			filename = dir + "/bddqn_head_fc_%d.model" % i
-			if os.path.isfile(filename):
-				serializers.load_hdf5(filename, self.head_fc_array[i])
-				print "model %s loaded successfully." % filename
+		filename = dir + "/bddqn_head_fc.model"
+		if os.path.isfile(filename):
+			serializers.load_hdf5(filename, self.head_fc)
+			print "model head_fc loaded successfully."
 
 		filename = dir + "/bddqn_shared_fc.optimizer"
 		if os.path.isfile(filename):
 			serializers.load_hdf5(filename, self.optimizer_shared_fc)
 			print "optimizer shared_fc loaded successfully."
 
-		for i, network in enumerate(self.optimizer_head_fc_array):
-			filename = dir + "/bddqn_head_fc_%d.optimizer" % i
-			if os.path.isfile(filename):
-				serializers.load_hdf5(filename, self.optimizer_head_fc_array[i])
-				print "optimizer %s loaded successfully." % filename
+		filename = dir + "/bddqn_head_fc.optimizer"
+		if os.path.isfile(filename):
+			serializers.load_hdf5(filename, self.optimizer_head_fc)
+			print "optimizer head_fc loaded successfully."
+
 
 	def save(self):
 		dir = "model"
 		serializers.save_hdf5(dir + "/bddqn_shared_fc.model", self.shared_fc)
-		for i, network in enumerate(self.head_fc_array):
-			filename = dir + "/bddqn_head_fc_%d.model" % i
-			serializers.save_hdf5(filename, self.head_fc_array[i])
-		print "model saved."
 		serializers.save_hdf5(dir + "/bddqn_shared_fc.optimizer", self.optimizer_shared_fc)
-		for i, network in enumerate(self.optimizer_head_fc_array):
-			filename = dir + "/bddqn_head_fc_%d.optimizer" % i
-			serializers.save_hdf5(filename, self.optimizer_head_fc_array[i])
-		print "optimizer saved."
+		serializers.save_hdf5(dir + "/bddqn_head_fc.model", self.head_fc)
+		serializers.save_hdf5(dir + "/bddqn_head_fc.optimizer", self.optimizer_head_fc)

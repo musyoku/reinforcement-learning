@@ -22,7 +22,7 @@ class Config:
 
 		self.rl_chain_length = 10
 
-		self.rl_minibatch_size = 32
+		self.rl_minibatch_size = 3
 		self.rl_replay_memory_size = 10 ** 6
 		self.rl_replay_start_size = 10 ** 5
 		self.rl_target_network_update_frequency = 10 ** 4
