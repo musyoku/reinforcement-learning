@@ -426,7 +426,6 @@ class BootstrappedDoubleDQN(DQN):
 		]
 		self.total_replay_memory = 0
 
-
 		self.shared_fc = self.build_network(units=config.q_bootstrapped_shared_fc_units)
 		self.target_shared_fc = copy.deepcopy(self.shared_fc)
 		self.optimizer_shared_fc = optimizers.Adam(alpha=config.rl_learning_rate, beta1=config.rl_gradient_momentum)
@@ -463,6 +462,30 @@ class BootstrappedDoubleDQN(DQN):
 		self.total_replay_memory += 1
 
 	def build_network(self, units=None):
+		if units is None:
+			raise Exception()
+		config.check()
+		wscale = config.q_wscale
+
+		# Fully connected part of Q-Network
+		fc_attributes = {}
+		fc_units = zip(units[:-1], units[1:])
+
+		for i, (n_in, n_out) in enumerate(fc_units):
+			fc_attributes["layer_%i" % i] = L.Linear(n_in, n_out, wscale=wscale)
+			fc_attributes["batchnorm_%i" % i] = BatchNormalization(n_out)
+
+		fc = FullyConnectedNetwork(**fc_attributes)
+		fc.n_hidden_layers = len(fc_units) - 1
+		fc.activation_function = config.q_fc_activation_function
+		fc.apply_batchnorm = config.apply_batchnorm
+		fc.apply_dropout = config.q_fc_apply_dropout
+		fc.apply_batchnorm_to_input = config.q_fc_apply_batchnorm_to_input
+		if config.use_gpu:
+			fc.to_gpu()
+		return fc
+
+	def build_head(self, units=None):
 		if units is None:
 			raise Exception()
 		config.check()
