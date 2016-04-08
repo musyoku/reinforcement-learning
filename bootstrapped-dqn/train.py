@@ -6,9 +6,10 @@ import model
 from env import Environment
 
 #############################################
-config.use_gpu = True
+config.use_gpu = False
 #############################################
 
+config.rl_chain_length = 10
 config.rl_model = "double_dqn"
 config.rl_model = "bootstrapped_double_dqn"
 config.rl_final_exploration_step = 10000
@@ -46,7 +47,6 @@ for episode in xrange(max_episode):
 		else:
 			action, q = model.eps_greedy(state, exploration_rate=exploration_rate)
 			next_state, reward, episode_ends = env.agent_step(action)
-		# print state, action, next_state, q, episode_rewards
 		total_steps += 1
 		sum_reward += reward
 		episode_rewards += reward
