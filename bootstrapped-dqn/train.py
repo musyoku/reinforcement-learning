@@ -11,7 +11,7 @@ config.use_gpu = True
 
 config.rl_model = "double_dqn"
 config.rl_model = "bootstrapped_double_dqn"
-config.rl_final_exploration_step = 10000
+config.rl_final_exploration_step = 20000
 config.apply_batchnorm = False
 
 model = model.load()
@@ -48,9 +48,12 @@ for episode in xrange(max_episode):
 		else:
 			action, q = model.eps_greedy(state, exploration_rate=exploration_rate)
 			next_state, reward, episode_ends = env.agent_step(action)
+		print np.array_str(state, max_line_width=1000000)
 		total_steps += 1
 		sum_reward += reward
 		episode_rewards += reward
+		if reward == 1.0:
+			print "*"
 		if bootstrapped:
 			model.store_transition_in_replay_memory(state, action, reward, next_state, mask, episode_ends)
 		else:

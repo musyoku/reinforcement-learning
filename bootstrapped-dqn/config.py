@@ -20,7 +20,7 @@ class Config:
 		# "bootstrapped_dqn"
 		self.rl_model = "bootstrapped_dqn"
 
-		self.rl_chain_length = 20
+		self.rl_chain_length = 30
 
 		self.rl_minibatch_size = 32
 		self.rl_replay_memory_size = 10 ** 6
@@ -39,10 +39,10 @@ class Config:
 		## e.g 500(input vector)->250->100(output vector)
 		## self.q_fc_units = [500, 250, 100]
 		## For DQN / Double DQN / DDQN + Dueling Network
-		self.q_fc_units = [self.rl_chain_length, 100, 1000, len(self.actions)]
+		self.q_fc_units = [self.rl_chain_length, 50, 50, 50, len(self.actions)]
 		## For Bootstrapped DQN
-		self.q_bootstrapped_shared_fc_units = [self.rl_chain_length, 100]
-		self.q_bootstrapped_head_fc_units = [self.q_bootstrapped_shared_fc_units[-1], 100, len(self.actions)]
+		self.q_bootstrapped_shared_fc_units = [self.rl_chain_length, 50, 50]
+		self.q_bootstrapped_head_fc_units = [self.q_bootstrapped_shared_fc_units[-1], 50, len(self.actions)]
 
 		# Number of bootstrap heads
 		self.q_k_heads = 10
