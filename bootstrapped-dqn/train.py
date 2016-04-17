@@ -48,7 +48,7 @@ for episode in xrange(max_episode):
 		else:
 			action, q = model.eps_greedy(state, exploration_rate=exploration_rate)
 			next_state, reward, episode_ends = env.agent_step(action)
-		print np.array_str(state, max_line_width=1000000)
+		# print np.array_str(state, max_line_width=1000000)
 		total_steps += 1
 		sum_reward += reward
 		episode_rewards += reward

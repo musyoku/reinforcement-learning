@@ -347,7 +347,6 @@ class DQN(Model):
 		if os.path.isfile(filename):
 			serializers.load_hdf5(filename, self.fc)
 			print "model loaded successfully."
-		dir = "model"
 		filename = dir + "/dqn_fc.optimizer"
 		if os.path.isfile(filename):
 			serializers.load_hdf5(filename, self.optimizer_fc)
