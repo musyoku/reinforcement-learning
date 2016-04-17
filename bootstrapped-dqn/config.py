@@ -45,9 +45,9 @@ class Config:
 		self.q_bootstrapped_head_fc_units = [self.q_bootstrapped_shared_fc_units[-1], 50, len(self.actions)]
 
 		# Number of bootstrap heads
-		self.q_k_heads = 20
+		self.q_k_heads = 10
 		# We sample a bootstrap mask from Bernoulli(p) 
-		self.q_p_mask_sampling = 1.0
+		self.q_p_mask_sampling = 0.5
 
 		# Common
 		## See activations.py
@@ -55,7 +55,7 @@ class Config:
 
 		self.q_fc_apply_dropout = False
 
-		self.q_fc_apply_batchnorm_to_input = True
+		self.q_fc_apply_batchnorm_to_input = False
 
 		## Default: 1.0
 		self.q_wscale = 0.1

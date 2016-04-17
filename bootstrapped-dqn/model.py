@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-import os, time
+import os, time, collections, six
 import numpy as np
 import chainer, math, copy, os
 from chainer import cuda, Variable, optimizers, serializers, function, link
@@ -164,6 +164,33 @@ class FullyConnectedNetwork(chainer.Chain):
 	def __call__(self, x, test=False):
 		return self.forward_one_step(x, test=test)
 
+
+def _sum_sqnorm(arr):
+	sq_sum = collections.defaultdict(float)
+	for x in arr:
+		with cuda.get_device(x) as dev:
+			x = x.ravel()
+			s = x.dot(x)
+			sq_sum[int(dev)] += s
+	return sum([float(i) for i in six.itervalues(sq_sum)])
+	
+class GradientClipping(object):
+	name = 'GradientClipping'
+
+	def __init__(self, threshold):
+		self.threshold = threshold
+
+	def __call__(self, opt):
+		norm = np.sqrt(_sum_sqnorm([p.grad for p in opt.target.params()]))
+		if norm == 0:
+			return
+		rate = self.threshold / norm
+		if rate < 1:
+			for param in opt.target.params():
+				grad = param.grad
+				with cuda.get_device(grad):
+					grad *= rate
+
 class Model:
 	def __init__(self):
 		self.exploration_rate = config.rl_initial_exploration
@@ -215,7 +242,7 @@ class DQN(Model):
 
 		self.optimizer_fc = optimizers.Adam(alpha=config.rl_learning_rate, beta1=config.rl_gradient_momentum)
 		self.optimizer_fc.setup(self.fc)
-		self.optimizer_fc.add_hook(chainer.optimizer.GradientClipping(10.0))
+		self.optimizer_fc.add_hook(GradientClipping(10.0))
 
 		self.update_target()
 
@@ -435,14 +462,14 @@ class BootstrappedDoubleDQN(DQN):
 		self.target_shared_fc = copy.deepcopy(self.shared_fc)
 		self.optimizer_shared_fc = optimizers.Adam(alpha=config.rl_learning_rate, beta1=config.rl_gradient_momentum)
 		self.optimizer_shared_fc.setup(self.shared_fc)
-		self.optimizer_shared_fc.add_hook(chainer.optimizer.GradientClipping(10.0))
+		self.optimizer_shared_fc.add_hook(GradientClipping(10.0))
 		self.optimizer_shared_fc.add_hook(GradientNormalizing(1.0 / config.q_k_heads))
 
 		self.head_fc = self.build_head(config.q_k_heads, config.q_bootstrapped_head_fc_units)
 		self.target_head_fc = copy.deepcopy(self.head_fc)
 		self.optimizer_head_fc = optimizers.Adam(alpha=config.rl_learning_rate, beta1=config.rl_gradient_momentum)
 		self.optimizer_head_fc.setup(self.head_fc)
-		self.optimizer_head_fc.add_hook(chainer.optimizer.GradientClipping(10.0))
+		self.optimizer_head_fc.add_hook(GradientClipping(10.0))
 
 	def store_transition_in_replay_memory(self, state, action, reward, next_state, mask, episode_ends):
 		index = self.total_replay_memory % config.rl_replay_memory_size
