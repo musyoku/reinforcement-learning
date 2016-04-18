@@ -51,14 +51,13 @@ class Config:
 
 		# Common
 		## See activations.py
-		self.q_fc_activation_function = "relu"
+		self.q_fc_activation_function = "elu"
 
 		self.q_fc_apply_dropout = False
-
 		self.q_fc_apply_batchnorm_to_input = False
 
 		## Default: 1.0
-		self.q_wscale = 0.1
+		self.q_wscale = 1.0
 
 	def check(self):
 		if self.q_fc_activation_function not in activations:
