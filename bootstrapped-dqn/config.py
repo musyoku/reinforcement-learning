@@ -51,7 +51,7 @@ class Config:
 
 		# Common
 		## See activations.py
-		self.q_fc_activation_function = "elu"
+		self.q_fc_activation_function = "sigmoid"
 
 		self.q_fc_apply_dropout = False
 		self.q_fc_apply_batchnorm_to_input = False
