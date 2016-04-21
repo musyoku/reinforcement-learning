@@ -7,7 +7,7 @@ class Config:
 		self.use_gpu = True
 		self.apply_batchnorm = True
 
-		# 11: rigtht
+		# 11: right
 		# 22: left
 		# 33: no-op
 		# 44: no-op
